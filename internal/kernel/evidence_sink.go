@@ -54,6 +54,14 @@ type evidenceLine struct {
 // MNEMOS_AXI_EVIDENCE_LOG; still empty returns a nil sink — callers
 // treat that as "disabled". Special values "-" / "stdout" route to
 // os.Stdout.
+//
+// The path is operator-supplied (WithEvidenceLog, MNEMOS_AXI_EVIDENCE_LOG,
+// or evidence_log: in the config), never request-supplied, so this is not
+// a traversal sink for untrusted input. It is still opened defensively:
+// this file is the tamper-evident audit chain, so a symlink planted at the
+// configured path would let a local user both redirect the audit trail and
+// have the process append attacker-shaped JSONL into an unrelated file.
+// openAuditFile refuses to follow symlinks where the platform supports it.
 func newEvidenceSink(path string) (*evidenceSink, error) {
 	if path == "" {
 		path = os.Getenv("MNEMOS_AXI_EVIDENCE_LOG")
@@ -64,10 +72,11 @@ func newEvidenceSink(path string) (*evidenceSink, error) {
 	if path == "-" || path == "stdout" {
 		return &evidenceSink{w: os.Stdout, path: "stdout", written: map[domain.ExecutionSessionID]bool{}}, nil
 	}
+	path = filepath.Clean(path)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, fmt.Errorf("axi evidence log: mkdir: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := openAuditFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("axi evidence log: open %s: %w", path, err)
 	}
