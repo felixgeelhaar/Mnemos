@@ -110,12 +110,17 @@ func (c *GeminiClient) Complete(ctx context.Context, messages []Message) (Respon
 		return Response{}, fmt.Errorf("marshal gemini request: %w", err)
 	}
 
-	endpoint := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s", c.baseURL, c.model, c.apiKey)
+	// The key goes in a header, never the query string. A ?key= URL ends up
+	// inside *url.Error on any transport failure — Go redacts userinfo there
+	// but never the query — and those errors are logged and returned to MCP
+	// clients, which would put a live key in an agent transcript.
+	endpoint := fmt.Sprintf("%s/v1beta/models/%s:generateContent", c.baseURL, c.model)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return Response{}, fmt.Errorf("create gemini request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", c.apiKey)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
