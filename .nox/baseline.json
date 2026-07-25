@@ -1,0 +1,985 @@
+{
+  "schema_version": "1.0.0",
+  "entries": [
+    {
+      "fingerprint": "32b4d23c3bbe8c1bfbb08acacbe8ea0e919908d89178e8c9d89d4320afd6eda0",
+      "rule_id": "AGENT-004",
+      "file_path": "CLAUDE.md",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "1fcadb466fc82a0da711d7296b0929802d95da6581eaec2bebfd7c1bd8e58792",
+      "rule_id": "AI-006",
+      "file_path": "cmd/mnemos/admin.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "a2764b87e1dd435efdcd8bd575eec853be1e641e2ca846b318c3f96bd00f24a9",
+      "rule_id": "AI-006",
+      "file_path": "cmd/mnemos/admin.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "5edbb9acf3d459e2e675b4c4d8a75cb41a083f374ce84e828530196a78e93b40",
+      "rule_id": "AI-006",
+      "file_path": "cmd/mnemos/init.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "c28869fb596862513faee7d02afe19501a3c01162da23bfe4e56204ce2028b42",
+      "rule_id": "AI-006",
+      "file_path": "cmd/mnemos/main.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "f1af7e1674977b26bb5ab82836f1fb1fd9d4793c83ad956edd67525c773ce4d0",
+      "rule_id": "AI-006",
+      "file_path": "cmd/mnemos/main.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "99d7fa1349b6aba9323b6e9fc9c62c339aa0be423d2a8f6e6e63a333c63f3688",
+      "rule_id": "AI-006",
+      "file_path": "cmd/mnemos/main.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "ddc4e01e85915d93d997822973ab481156ce38aea9619489d40f126e1e899658",
+      "rule_id": "AI-006",
+      "file_path": "cmd/mnemos/setup.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "a258f9cd4b7d64f29832bbd9fd1f24dd879a73d0874f43695cd5f2b6d7a18240",
+      "rule_id": "AI-050",
+      "file_path": "internal/workflow/runner_test.go",
+      "severity": "low",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "214dd2f507109d807044cf1a64b7449f473211edec704364fa497165c77949bf",
+      "rule_id": "CONT-001",
+      "file_path": "Dockerfile",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "086cc9d41425abb2e90cfd7d62e3b58a2df64007c3a2440a18cec6f28c3d6fb7",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/actor_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "2218072182a8c521d2109d45b67767cbf5c4d61afa8685cd9feb9ed36045e1e7",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/actor_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "b318baf47e50f652d0a98007e06f85aa35c138fb50bd6953f35d56210859aeb9",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/docsync_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "3c9125af61d754ca35d6f30b3536a89caab0a6ca1a6500e5110dd7f9f84f9913",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/dsn_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "d1a0a0e1362e5f9b006056cea9fa01420065870e5d971215533d4cf723a76e83",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/gitcontext_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "0d5c858bdeb41aeb36191763bf2e3ec2c3d7e64e68d4554f41c7f33360466887",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/registry_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "6d983817b1064a0106b75ee76c196d4abce5e1033b3e8ffcfb2a5ff2cdc4b944",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/serve_batch4_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "7db6adf9dea31237383a777779ef3ec09be54a4b555b2c08508fa3a4c387f0ed",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/serve_expectations_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "4cf468910cd1a4e675305f481bfa321b47bb705368c62d75a53aa394bfcf836b",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/serve_feedback_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "308368243a5c063303cba5c0c12799a763323f4026c9aeb42e0f93c23fabb589",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/serve_gdpr_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "aa5fc11f7b7dd6b7285150347747fb2f590358eb4393e225375e53aa7ed29818",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/serve_leads_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "9b4b0bd0bdf35fa68920bbda33375e37607afef4415023c63a885e5f4418564e",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/serve_leads_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "46e63df5b12fb78c08516e95b13d96fd033d711267cf04ef329821a41aa2bac9",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/serve_leads_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "17a00d9104799958fa2e9164304a7ba0fb9ece21aee7f79a2bdeab1783b3cf11",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/serve_leads_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "e27e236d2279e683d0ea25de27ea8fe81189f5b3873859ae78c408a0dc55f5a6",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/serve_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "d9cc6364690dbfaff7d5a8f3023259fc58a400e4c46cb99fa751b16703fc5c2e",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/serve_write_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "3e867a113ca20b8773d625cf01ad2a08d918f71fdb9c1c08c2fad59a2dfc471e",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/serve_write_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "72f60d9f04a696dc0d3edf39032c66bd7d6386aeff3974d0ac800e1baa815605",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/serve_write_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "e63b9d4380823d5ead52263a8792393edbe2d9f0e39a7ed54d806182db709743",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/web/landing.html",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "3fd1630ce26ce79cfcacf019c4399a1df3171df3bb1c76f6b242e71e15824030",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/web/landing.html",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "3267a857ede1cf93bb7469ac263fd58aa2c12f3164ed3f47ba59562eb0314eee",
+      "rule_id": "DATA-001",
+      "file_path": "data/eval/robustness.yaml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "9d2b5033c52d14db26d6009783efa48b21bc9a1c9a4453ae941fcf14d78fa21b",
+      "rule_id": "DATA-001",
+      "file_path": "docs/index.html",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "4c62f9335ef6562773a98a854e73dfe02acbff6525d2804985bb7dbd4b9b995f",
+      "rule_id": "DATA-001",
+      "file_path": "internal/auth/jwt_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "48ec223b951b1cc3c442fc0a2b058ec34b1bf53255bad35242ad145e6debd538",
+      "rule_id": "DATA-001",
+      "file_path": "internal/auth/jwt_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "789942ad5c85d93278b652174b71b95727a178fde0f07b1611c7a1e6384e7993",
+      "rule_id": "DATA-001",
+      "file_path": "internal/auth/jwt_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "d52ca8d4135e3cce895af7ed576174869f8dbee8e9e0abec1e27e6e2bca5d688",
+      "rule_id": "DATA-001",
+      "file_path": "internal/auth/jwt_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "be8318498a9d2feca4d23886b160c8285a1ca6a3ad0695a7dac881ceaa93d639",
+      "rule_id": "DATA-001",
+      "file_path": "internal/auth/jwt_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "05fdfbd7247f002ea15f7d52db817d8073af032764b7a84cbcf812332cfd7537",
+      "rule_id": "DATA-001",
+      "file_path": "internal/auth/jwt_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "b902ec4ae0de9fbef03a2cc9b038350654b1245b4093111ac2a9335db168a792",
+      "rule_id": "DATA-001",
+      "file_path": "internal/store/sqlite/concurrent_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "fc3639bbd77511d9ebf2845d7d9848f47bd895ef3fe5bf144ad4be5bfa4c028d",
+      "rule_id": "DATA-001",
+      "file_path": "internal/store/sqlite/concurrent_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "f4b066eccfdfb3ae83f8cf4d6882ef635902603bc27b97a86274059d8e542e61",
+      "rule_id": "DATA-001",
+      "file_path": "internal/store/sqlite/user_repository_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "b5a7f6d9539ee4c1e86f9650c1d156eed3174bfbe6c5c86f14bf1ceb094674ee",
+      "rule_id": "DATA-001",
+      "file_path": "internal/store/sqlite/user_repository_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "14ead7d6bfe8fbd7828118d6faf11c97bf779492d49d58d7763ae8cf0814ae8a",
+      "rule_id": "DATA-001",
+      "file_path": "internal/store/sqlite/user_repository_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "5122f22ceb6927088aa6062f151ab643a2d8bf840ea96cd427f28d6224e99cb6",
+      "rule_id": "DATA-005",
+      "file_path": "cmd/mnemos/mcp_http_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "efcfc76d2780aa95c2b6704e871509eac4d0dc7ee3fb42ad69b8d176d66cb6b7",
+      "rule_id": "DATA-005",
+      "file_path": "internal/store/mysql/mysql.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "239d0c10d2669c67c453728217062766d368c307c7cb25d6b478dd8df17ee50d",
+      "rule_id": "DATA-005",
+      "file_path": "test/integration/docker-compose.yml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "9e1a7b19358d6a56aa6236ff55d452ba346c1d824bb455e71a333e1d1c96a2d1",
+      "rule_id": "IAC-121",
+      "file_path": "Dockerfile",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "e00c51bfc3329de81afc0694bac32126ad6633509c1a86c193d918c2bb3c0131",
+      "rule_id": "IAC-123",
+      "file_path": "Dockerfile",
+      "severity": "low",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "4fd64c61428129c9b590f1fc650db67aadfdc5b80a6dcfc20226c977d7a5c204",
+      "rule_id": "IAC-124",
+      "file_path": "Dockerfile",
+      "severity": "low",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "df53a9a1533b12f102fbb595315223e1176ad147bcbe2f8b03e4d257d4e93cfc",
+      "rule_id": "IAC-131",
+      "file_path": ".rollops/hermes-mnemos.yaml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "f156f1611a12df396a83c8a7b18ea6990d7480bfbf29b04de5f6a65b6868795f",
+      "rule_id": "IAC-132",
+      "file_path": ".rollops/hermes-mnemos.yaml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "6e388cc5c787c77426913d79ef617aa70da7aa66a80d7ff427b2de4642f0fbbf",
+      "rule_id": "IAC-135",
+      "file_path": ".rollops/hermes-mnemos.yaml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "7fa8342477fd0c936457b973c19610c163922607db35b30dc38220c5728ac851",
+      "rule_id": "IAC-141",
+      "file_path": ".rollops/hermes-mnemos.yaml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "0bb1a8ad7959b195918f26e9f57d032f995a3ddf6b46802c3931b1bb0572011e",
+      "rule_id": "IAC-142",
+      "file_path": ".rollops/hermes-mnemos.yaml",
+      "severity": "low",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "a7d3f70018b391313086aa35fa06d2401498c3e811dc71269f7afc5668d4279b",
+      "rule_id": "IAC-145",
+      "file_path": ".rollops/hermes-mnemos.yaml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "626a7458a3ffa9cef95a9ea6bdaa8d7fd0f07dbe80220b3fa03c99a397fbe4cf",
+      "rule_id": "IAC-153",
+      "file_path": "docs-site/.github/workflows/docs.yml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "8ccc3d33fe151c10d916180983cc3a1c39b4c5a7680b1266af06f9895c7d177d",
+      "rule_id": "IAC-183",
+      "file_path": ".rollops/hermes-mnemos.yaml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "3af397ff8b4d9649564af7fd7282203800014408e0864b376dbb5382d28ea853",
+      "rule_id": "IAC-185",
+      "file_path": ".rollops/hermes-mnemos.yaml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "b3c04c1506fa2037d3cc21f0444340e927a8c12c4da03fd3fd3e91a46ef083dd",
+      "rule_id": "IAC-231",
+      "file_path": ".rollops/hermes-mnemos.yaml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "42df299de6689fb9557da9b0e085d49a3d7c33e0756d62123ec6d26bb9d6acdc",
+      "rule_id": "IAC-231",
+      "file_path": "benchmarks/docker-compose.yml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "453ba03fb89b17569398f5ab2bc03b9568229c0c916972be822204e948545922",
+      "rule_id": "IAC-231",
+      "file_path": "benchmarks/docker-compose.yml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "adf75246bfd98a0b8085923df0f90351f982721c0684c2f5967e08635c83f88f",
+      "rule_id": "IAC-231",
+      "file_path": "benchmarks/docker-compose.yml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "7ef485203e7eafd08549ac444947726610bc794b080468e20f7ecbab803ba2ca",
+      "rule_id": "IAC-231",
+      "file_path": "test/integration/docker-compose.yml",
+      "severity": "low",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "8c7ffe65f7ed47a6b08376867043f8433d315337207fa3d237fbaa0fc4b34d54",
+      "rule_id": "IAC-231",
+      "file_path": "test/integration/docker-compose.yml",
+      "severity": "low",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "40f394f1bb8b793ed03331da0ef9e6d2ab2969594fb20d0040f043126e0418f2",
+      "rule_id": "IAC-238",
+      "file_path": "data/eval/boundaries.yaml",
+      "severity": "low",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "f344845656161443496cd172f1600de9065f6f53b1273d68f6349b05a13adbe0",
+      "rule_id": "IAC-238",
+      "file_path": "data/eval/deduplication.yaml",
+      "severity": "low",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "43369ffdbbcc8de0bcf0b3abc2128191ef3058279cb41a7b3956f75e9e3aab52",
+      "rule_id": "IAC-238",
+      "file_path": "data/eval/edge_cases.yaml",
+      "severity": "low",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "eabb2fcc4d2b7d4bacfd23928f60ef169c6efc290685fb8900833f661b721f0b",
+      "rule_id": "IAC-238",
+      "file_path": "data/eval/robustness.yaml",
+      "severity": "low",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "a9c6a527221936c056a465016d69aa24145ec8766e4331dfa1af3863e7d56b8e",
+      "rule_id": "IAC-254",
+      "file_path": "benchmarks/docker-compose.yml",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "e0b6aee30d49517a903e8be4dbfb78c2a9b460b35675b8e736983452a292d188",
+      "rule_id": "IAC-254",
+      "file_path": "benchmarks/docker-compose.yml",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "4bf3a7a369a6e40cca796161e17cdfa724b9e09fd690cbf9beb5dc5ba8ed7bfe",
+      "rule_id": "IAC-254",
+      "file_path": "benchmarks/docker-compose.yml",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "1730ecfa7485d191fa874a50e5afe8c46bf410be6da2ea7a413692a8ff7f3863",
+      "rule_id": "IAC-254",
+      "file_path": "benchmarks/docker-compose.yml",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "07e8ab2cc05bff614321d3f8e3260df9c4fc25d64459846a10d1f15f79c2c0a6",
+      "rule_id": "IAC-286",
+      "file_path": ".rollops/hermes-mnemos.yaml",
+      "severity": "low",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "5f11f2b1487bb0491b4517eac46554adfafd418385a5ab5c1f01d2a34fb97937",
+      "rule_id": "IAC-308",
+      "file_path": "docs-site/.github/workflows/docs.yml",
+      "severity": "low",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "f77601ed7c0992945e42f455f083f2f0eb4b08205b57ae8a6d945a47d562a5a2",
+      "rule_id": "IAC-314",
+      "file_path": "docs-site/.github/workflows/docs.yml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "5f28a9c0bf2943404a5f1bade5fdb117c4d798d1c57fb074f6274a38df4805f8",
+      "rule_id": "IAC-363",
+      "file_path": ".rollops/hermes-mnemos.yaml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "7abafc6cfb89a361e8fc21a897dec3332b9f9c5f41be31f77ac9096a52618f50",
+      "rule_id": "IAC-406",
+      "file_path": "api/openapi.yaml",
+      "severity": "low",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "109162fa5cddcf174a6a55c1beeda52e73b33b5c524dcb0bc48dd32dc989e347",
+      "rule_id": "IAC-406",
+      "file_path": "api/openapi.yaml",
+      "severity": "low",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "aa80492448b87337cfbee147ff5112fc841137c842c2ef9702d89c369b550d7e",
+      "rule_id": "IAC-464",
+      "file_path": ".rollops/hermes-mnemos.yaml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "fa7c1229611924ff8548395bf4c060a4852ec1804a84df5d13f0b6f6df8c895d",
+      "rule_id": "IAC-464",
+      "file_path": ".rollops/infra-svc-mnemos.yaml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "203bfbfea6818b3126225af7fed7f6a92dd378963e45b3f0370c220658e2cf97",
+      "rule_id": "IAC-498",
+      "file_path": ".rollops/hermes-mnemos.yaml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "460f26fefafeb395417b8fd1a788f7b8c6f8706c0efd4b740b31d372693adc08",
+      "rule_id": "SEC-073",
+      "file_path": "benchmarks/docker-compose.yml",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "99942828635ccdd08d898d4553b1ea2dc12709dac194d2eb877e9bf809d4780d",
+      "rule_id": "SEC-073",
+      "file_path": "benchmarks/docker-compose.yml",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "a7d8403977797b2b69d982eb5896fc18231f617c9f2abb807a5097088a12093d",
+      "rule_id": "SEC-073",
+      "file_path": "benchmarks/docker-compose.yml",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "ce92a69786200a8c94cd1e43b8adc4551297a9bb28b5fef7896e6fe64830a01a",
+      "rule_id": "SEC-073",
+      "file_path": "cmd/mnemos/dsn_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "9e88c06bf86b565d2a4c0ea41ce7d39577768114aa20adc7308737fdaeb0291e",
+      "rule_id": "SEC-073",
+      "file_path": "cmd/mnemos/dsn_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "f8fce8f0147c60853e962b8e3a3e2ca8404724e07d85f49dd5df46f7366d549b",
+      "rule_id": "SEC-073",
+      "file_path": "cmd/mnemos/dsn_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "4c754d71c96fd27e0203587a45b62c26fa8c67113c3be0dea93c1b483964ec9b",
+      "rule_id": "SEC-073",
+      "file_path": "cmd/mnemos/hooks_install_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "1fac7b52f03d02804d99a7f8ea2752708204f4fb7a6907e8110cb0ec9584fc32",
+      "rule_id": "SEC-073",
+      "file_path": "cmd/mnemos/init_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "54b22394a8fdd30145bcea68d5e166a8b3a1c1e860affdffb4de9ecc71972744",
+      "rule_id": "SEC-073",
+      "file_path": "cmd/mnemos/init_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "2e77aa1d0a1807f437daa6c77a813e3d08f85ec312eb19248741a3fdfd3ba059",
+      "rule_id": "SEC-073",
+      "file_path": "cmd/mnemos/workspace_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "2c834156b1093742818fdfa94eff26f69cc83a712fec2de50d8ef3290d0d84a5",
+      "rule_id": "SEC-073",
+      "file_path": "docs-site/docs/self-host.md",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "71a11f7edc4fab4fe9c6504ad1f3440a86a8eadfbfbb85d49162b08c725dbde4",
+      "rule_id": "SEC-073",
+      "file_path": "docs/adr/0001-multi-backend-storage.md",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "033730343d749d93cc8493ff433aabe13197b13626d8397c9429217eeecb2956",
+      "rule_id": "SEC-073",
+      "file_path": "docs/adr/0001-multi-backend-storage.md",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "daaab6c9f982eff2b3d6142dc75d032c1270210318e3c1d5922bc41e79e059b0",
+      "rule_id": "SEC-073",
+      "file_path": "docs/adr/0001-multi-backend-storage.md",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "e0643fb007c60058b2211bf4896268836e68578b6287809995aaad7881c13cfc",
+      "rule_id": "SEC-073",
+      "file_path": "internal/config/merge_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "0ea15235b11d2582b8c76104c21af978b4ee5c4e30f46b45a57c5b138823b7de",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/dsn_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "1e88f9750922f4d44957b67af692e64ab6d39815e486a829600e2b50a312242c",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/dsn_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "ca2ef5780d647f8f5a12822f3bb9eafe9ff4feaa5e83f57580626963c93b933a",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/dsn_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "45eaeb774bc7b008f7664dd37a9bf86d9eeec184b1c18715b9a2fa83327f09fc",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/dsn_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "0197b5e12360641ed605842aa709a5c89866058ba80196c776d20a50fcca1212",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/dsn_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "3ddbdefc83a71710678b58be6f303beac045e4064b54360e3d3fb7b025d581d4",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/dsn_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "5f9e32c9c90c5518cd9b119d27b11e0dc91db94c5efdb7207cb2aa6e49826150",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/mysql/mysql_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "6cf2190362ffd2273da39fbd0a61d2c18ef9118dd7ba57094405ec56f5d38a9a",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/mysql/mysql_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "05ffab01c93b2462ef9275bf952a256befeef2619590de28d36f93b5dad67080",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/mysql/mysql_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "35d61552869ce2c2a1862c7f79f5feddfba19805308964cfc5f1efcbe4db0010",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/postgres/postgres_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "388ca6a7104d5124733be1efa82356503418397b61d6580f59b4e3bde0db2286",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/postgres/postgres_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "eefa91f4aa7db2a313d6b2420d493683bb420752e76272aec35569824e69145a",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/postgres/postgres_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "33308bd5fff0d453b17b8f4f492951bc79d823d370e20db503e3b337c7adc445",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/postgres/postgres_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "52ad89a369e43b2d91181212c78f77c516ebb4adbb7d5bc7feb1af6129d5c761",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/postgres/postgres_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "1793d9cab3d4bd5efa48b5f5ddd48c606cbc0e206903f2d4532468c0cc52c570",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/store.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "bee716a1623405aac81b0f7d0f51cc66878ceafd1087bdc35c13e29eca0e2d86",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/tenancy_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "b3c54ed04680058d824e8375c5990d54137056274c0795a32193775675c536d0",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/tenancy_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "df9c57e3301d45ce7ffa058188de7a86f15e7133ad1de9863859fa17eed225f0",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/tenancy_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "95322959fe52c69708f3ed9356d739e445a1f181d60631125ef9712acc5ebddc",
+      "rule_id": "SEC-073",
+      "file_path": "internal/store/tenancy_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "a7e65ba8a74be4e6100797f7a23636b37d85f7794c92d969f2842036d26d4be4",
+      "rule_id": "SEC-073",
+      "file_path": "scripts/test-integration.sh",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "1aceca667074144a22a3f2b1d0700d2ad33176cb158959cde243d99f2348cb73",
+      "rule_id": "SEC-073",
+      "file_path": "scripts/test-integration.sh",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "e1d7bf93b71f48db5b28228d68d52bb16ea5351b9db5cde7d6e4651945f3679e",
+      "rule_id": "SEC-073",
+      "file_path": "tenant_internal_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "b86100c16ad208da8cda34f16576aa65f565c0e9a1138c05097c4c520ec458e2",
+      "rule_id": "SEC-073",
+      "file_path": "tenant_internal_test.go",
+      "severity": "critical",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "d534c8778098554a8388a143201569d97a44de864286c28d7e72370ed3b83198",
+      "rule_id": "SEC-081",
+      "file_path": "test/integration/docker-compose.yml",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "601268093ff793bba8ffcd1a35943e5bb5b5190ff27e948865ff38a6e6073376",
+      "rule_id": "SEC-082",
+      "file_path": "cmd/mnemos/registry.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "3138f12773b8c085438a8c721a02019e358c9d9a918571854cd0e362f298158f",
+      "rule_id": "SEC-147",
+      "file_path": "internal/trust/trust_test.go",
+      "severity": "high",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "4e0d97f70082490e25dcd600ef8fe228e1430730f29c69ac4f19b34734f18d04",
+      "rule_id": "SEC-147",
+      "file_path": "internal/trust/trust_test.go",
+      "severity": "high",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "0412731a55eb18a16b5488267cfe900e7350f5d653cd4f32a595a2cc1d1e319e",
+      "rule_id": "SEC-161",
+      "file_path": "internal/store/sqlite/db.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "0675a4c619c921a66a78f6a6ad83c03dae1f4a108e0f5bb51abfb2470e3863ad",
+      "rule_id": "SEC-161",
+      "file_path": "internal/store/tenancy_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "d9131a60812aba473e391b8aaabb93709e9875cc8e72e4597987a0f9893d4ca6",
+      "rule_id": "SEC-163",
+      "file_path": "cmd/mnemos/dsn_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "e12554a5559ac444beffa6068c049edda6c49e541a083e45c2bb4abfcc252ef1",
+      "rule_id": "SEC-163",
+      "file_path": "cmd/mnemos/init_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "124bf157c2b7f4540e5d1c07ae5bd77e0dbede4e99ace97669a37c2bacd9de81",
+      "rule_id": "SEC-163",
+      "file_path": "cmd/mnemos/registry.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "78e1221bb6335e75fb5489f4d5fa7e0eac97fafde58c338a83913b80e6b2d2b5",
+      "rule_id": "SEC-163",
+      "file_path": "cmd/mnemos/registry.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "9c58b4632c89e89871660573e1e663e4ffa3534d9d694748d7107351e12b7ae7",
+      "rule_id": "SEC-163",
+      "file_path": "internal/embedding/gemini.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "6ade0378c3e80fb0a0cc0c017f1bef866c726652863f16ddbf7ae8e6b1ca54b8",
+      "rule_id": "SEC-163",
+      "file_path": "internal/llm/gemini.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "6612199d0ec6c7e24d7b692ee01c5ae08544edfcffdbf7b47824e7ab8ff7c5ae",
+      "rule_id": "SEC-163",
+      "file_path": "internal/llm/gemini.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "9a3f926b8a06947e50403bdf65843fdd3e443d6acebf69140b2486a452f4937f",
+      "rule_id": "SEC-163",
+      "file_path": "internal/store/sqlite/db.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "47fa3018e309c23745b4fb99b1d8cad762db014c6b01bf0dc8c854570d088abc",
+      "rule_id": "SEC-163",
+      "file_path": "internal/store/tenancy_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "9f71b7ad229fc8f384744661853cab300ffb572b448ce10e61fed75da3a974ca",
+      "rule_id": "SEC-163",
+      "file_path": "new.go",
+      "severity": "medium",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "b11b4afc9ba9e65965ed2f5d72ed1158c60ee9d36a4ffcf28b7961da5e4f866c",
+      "rule_id": "SEC-533",
+      "file_path": "learning_dynamics_test.go",
+      "severity": "high",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "db62c611d77dd6753d81dd535a65f9a9c88ab4691c4747afcfaceee3b8d870b7",
+      "rule_id": "SEC-533",
+      "file_path": "reinforce_test.go",
+      "severity": "high",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "178c54aea30a04dcb5895d00025b1c2879ce776b93fdef4561ff8478e1ff476e",
+      "rule_id": "SEC-533",
+      "file_path": "salience_test.go",
+      "severity": "high",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "461687db2654cf8d811251328f06177c43d83264cc957785225c275a0ab911bb",
+      "rule_id": "SEC-788",
+      "file_path": "test/integration/docker-compose.yml",
+      "severity": "high",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "b249ee9dfef7ffc2f653fb528a4bdaea37824ce90cbc87a220ad8da2d545da0e",
+      "rule_id": "TAINT-004",
+      "file_path": "internal/kernel/evidence_sink.go",
+      "severity": "high",
+      "created_at": "2026-07-25T19:24:07.826791Z"
+    }
+  ]
+}
