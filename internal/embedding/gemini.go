@@ -82,12 +82,17 @@ func (c *GeminiEmbedder) Embed(ctx context.Context, texts []string) ([][]float32
 		return nil, fmt.Errorf("marshal gemini embedding request: %w", err)
 	}
 
-	endpoint := fmt.Sprintf("%s/v1beta/models/%s:batchEmbedContents?key=%s", c.baseURL, c.model, c.apiKey)
+	// The key goes in a header, never the query string — a ?key= URL is
+	// echoed back inside *url.Error on any transport failure, and those
+	// errors are logged and surfaced to MCP clients. See the matching
+	// comment in internal/llm/gemini.go.
+	endpoint := fmt.Sprintf("%s/v1beta/models/%s:batchEmbedContents", c.baseURL, c.model)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create gemini embedding request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", c.apiKey)
 
 	resp, err := c.http.Do(req)
 	if err != nil {

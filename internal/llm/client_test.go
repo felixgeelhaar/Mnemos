@@ -96,9 +96,14 @@ func TestGeminiClientComplete(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("unexpected method: %s", r.Method)
 		}
-		// Path should include model name and key.
-		if r.URL.Query().Get("key") != "test-key" {
-			t.Fatalf("missing api key in query")
+		// The key must travel in a header, not the query string: a ?key= URL
+		// is echoed back inside *url.Error on any transport failure, and those
+		// errors are logged and returned to MCP clients.
+		if got := r.Header.Get("x-goog-api-key"); got != "test-key" {
+			t.Fatalf("x-goog-api-key header = %q, want %q", got, "test-key")
+		}
+		if r.URL.Query().Has("key") {
+			t.Fatalf("api key must not appear in the query string: %s", r.URL.RawQuery)
 		}
 
 		resp := geminiResponse{
