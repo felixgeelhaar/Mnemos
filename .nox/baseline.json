@@ -980,6 +980,14 @@
       "file_path": "internal/kernel/evidence_sink.go",
       "severity": "high",
       "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "9e781a4423957c6553c0d5c10145b7789c54011df50d13af7799a66d07542863",
+      "rule_id": "",
+      "file_path": "",
+      "severity": "",
+      "reason": "TAINT-004 false positive: evidence log path is operator-set config (MNEMOS_AXI_EVIDENCE_LOG), not attacker input. Linux/CI fingerprint variant of the same finding.",
+      "created_at": "2026-07-25T19:28:24.393969Z"
     }
   ]
 }
