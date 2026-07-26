@@ -44,14 +44,21 @@ archives:
 # pre-compiled binary — the old path generated a formula that only pretended to
 # build from source.
 #
-# Existing `brew install klarlabs-studio/tap/mnemos` users are migrated
-# automatically by tap_migrations.json in the tap repo; without that file they
-# would keep the orphaned formula and silently stop receiving updates.
+# The cask goes to the tap owned by the org that owns this repo, which is also
+# the scope the org secret behind HOMEBREW_TAP_GITHUB_TOKEN can write to. A
+# personal tap sits outside it and answers 403 — briefkasten's v0.31.0
+# published all its artifacts and then failed exactly there.
+#
+# Keeping it here is also what keeps existing `brew install
+# klarlabs-studio/tap/mnemos` users on the update path: no tap_migrations.json
+# exists in either tap, so a move would orphan them silently. (An earlier
+# revision of this comment asserted that file was already doing the migrating.
+# It was never written.)
 homebrew_casks:
   - ids:
       - bundles
     repository:
-      owner: felixgeelhaar
+      owner: klarlabs-studio
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/klarlabs-studio/mnemos
