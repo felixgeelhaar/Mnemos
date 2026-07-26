@@ -115,7 +115,7 @@ func handlePromote(args []string, f Flags) {
 		}
 		scopes, err := store.EnumerateTenants(ctx, baseDSN)
 		if err != nil {
-			exitWithMnemosError(false, NewSystemError(err, "enumerate tenants of %q", baseDSN))
+			exitWithMnemosError(false, NewSystemError(err, "enumerate tenants of %q", store.RedactDSN(baseDSN)))
 			return
 		}
 		for _, s := range scopes {
@@ -140,13 +140,13 @@ func handlePromote(args []string, f Flags) {
 		for _, dsn := range dsns {
 			conn, err := store.Open(ctx, dsn)
 			if err != nil {
-				exitWithMnemosError(false, NewSystemError(err, "open tenant store %q", dsn))
+				exitWithMnemosError(false, NewSystemError(err, "open tenant store %q", store.RedactDSN(dsn)))
 				return
 			}
 			lessons, err := conn.Lessons.ListAll(ctx)
 			if err != nil {
 				_ = conn.Close()
-				exitWithMnemosError(false, NewSystemError(err, "list lessons for %q", dsn))
+				exitWithMnemosError(false, NewSystemError(err, "list lessons for %q", store.RedactDSN(dsn)))
 				return
 			}
 			// ADR 0012 Path A: also read the tenant's claims and synthesize
@@ -155,7 +155,7 @@ func handlePromote(args []string, f Flags) {
 			claims, err := conn.Claims.ListAll(ctx)
 			_ = conn.Close()
 			if err != nil {
-				exitWithMnemosError(false, NewSystemError(err, "list claims for %q", dsn))
+				exitWithMnemosError(false, NewSystemError(err, "list claims for %q", store.RedactDSN(dsn)))
 				return
 			}
 			lessons = append(lessons, knowledgeSchemasFromClaims(claims)...)
@@ -266,11 +266,11 @@ func applyPromotion(ctx context.Context, globalDSN string, res consolidate.Resul
 	}
 	conn, err := store.Open(ctx, globalDSN)
 	if err != nil {
-		return wc, NewSystemError(err, "open global store %q", globalDSN)
+		return wc, NewSystemError(err, "open global store %q", store.RedactDSN(globalDSN))
 	}
 	defer func() { _ = conn.Close() }()
 	if conn.GlobalSchemas == nil {
-		return wc, NewUserError("global store %q does not support promoted-schema persistence", globalDSN)
+		return wc, NewUserError("global store %q does not support promoted-schema persistence", store.RedactDSN(globalDSN))
 	}
 
 	now := time.Now().UTC()
@@ -302,7 +302,7 @@ func handlePromoteApprove(ctx context.Context, opts promoteOpts) {
 	}
 	conn, err := store.Open(ctx, opts.globalDSN)
 	if err != nil {
-		exitWithMnemosError(false, NewSystemError(err, "open global store %q", opts.globalDSN))
+		exitWithMnemosError(false, NewSystemError(err, "open global store %q", store.RedactDSN(opts.globalDSN)))
 		return
 	}
 	defer func() { _ = conn.Close() }()
@@ -451,11 +451,11 @@ func verifyCuratorToken(ctx context.Context, tokenStr, revocationDSN string) err
 
 	conn, err := store.Open(ctx, revocationDSN)
 	if err != nil {
-		return NewSystemError(err, "open store %q to check curator-token revocation", revocationDSN)
+		return NewSystemError(err, "open store %q to check curator-token revocation", store.RedactDSN(revocationDSN))
 	}
 	defer func() { _ = conn.Close() }()
 	if conn.RevokedTokens == nil {
-		return NewUserError("store %q cannot verify token revocation", revocationDSN)
+		return NewUserError("store %q cannot verify token revocation", store.RedactDSN(revocationDSN))
 	}
 
 	claims, err := auth.NewVerifier(secret, conn.RevokedTokens).ParseAndValidate(ctx, tokenStr)

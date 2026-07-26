@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"go.klarlabs.de/mnemos/internal/store"
 )
 
 // handleSetup implements `mnemos setup [claude-code]` — the one-command path
@@ -86,7 +88,7 @@ func runSetupClaudeCode(opts setupOpts) {
 
 	fmt.Println("Setting up Mnemos as a central brain for Claude Code")
 	fmt.Printf("  scope:  %s (%s)\n", scope, ternary(opts.project, "this project", "all projects"))
-	fmt.Printf("  brain:  %s\n\n", dsn)
+	fmt.Printf("  brain:  %s\n\n", store.RedactDSN(dsn))
 
 	// 1. Make sure the storage directory exists so the first write succeeds.
 	if !opts.print {
@@ -216,7 +218,7 @@ func runClaudeOutput(claude string, args ...string) (string, error) {
 func mcpJSONSnippet(bin, dsn string, inlineDSN bool) string {
 	env := ""
 	if inlineDSN {
-		env = fmt.Sprintf("\n      \"env\": { \"MNEMOS_DB_URL\": %q },", dsn)
+		env = fmt.Sprintf("\n      \"env\": { \"MNEMOS_DB_URL\": %q },", dsn) // dsn-redaction-ok: writes the real DSN into Claude's MCP config; inlineDSN is only set for credential-free DSNs (networked ones go to the 0600 config file instead)
 	}
 	return fmt.Sprintf(`
 {

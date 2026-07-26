@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -389,12 +388,13 @@ func canonBrain(dsn string) string {
 }
 
 // redactDSN returns a DSN with any password redacted, for human/plan display.
+// redactDSN masks the password in a DSN before it reaches an error message.
+//
+// Delegates to store.RedactDSN so there is ONE implementation. There used to be
+// three (this, store.RedactDSN, and displayDSN), applied ad hoc per call site —
+// which is how nine error paths ended up printing live credentials while the
+// success path was carefully redacted. Redaction applied by hand at each site
+// is redaction that will be forgotten at the next site.
 func redactDSN(dsn string) string {
-	if u, err := url.Parse(dsn); err == nil && u.User != nil {
-		if _, hasPassword := u.User.Password(); hasPassword {
-			u.User = url.UserPassword(u.User.Username(), "redacted")
-			return u.String()
-		}
-	}
-	return dsn
+	return store.RedactDSN(dsn)
 }

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"go.klarlabs.de/mnemos/internal/domain"
+	"go.klarlabs.de/mnemos/internal/store"
 )
 
 // Doc-sync writes a repo's high-signal learnings into an agent-facing markdown
@@ -273,7 +274,7 @@ func handleRebuild(args []string, f Flags) {
 	ensureRepoGitignore(repoRoot)
 
 	lines := strings.Count(strings.TrimSpace(text), "\n") + 1
-	fmt.Printf("Rebuilt repo brain %s from %s (%d learning line(s)).\n", brainDSN, docPath, lines)
+	fmt.Printf("Rebuilt repo brain %s from %s (%d learning line(s)).\n", store.RedactDSN(brainDSN), docPath, lines)
 }
 
 // ---- sync-back: fold human edits of the managed block into the brain ----
