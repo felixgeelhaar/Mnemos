@@ -507,7 +507,7 @@ func handleQuery(args []string, f Flags) {
 
 		// --why-wrong: audit-trail mode — list decisions refuted by failed outcomes.
 		if qa.whyWrong {
-			if statusErr := job.SetStatus("auditing", ""); statusErr != nil {
+			if statusErr := job.SetStatus("querying", ""); statusErr != nil { // "auditing" was never a machine state — see TestJobStatusesAreDeclaredInTheMachine
 				return statusErr
 			}
 			auditOpts := query.AuditTrailOptions{
@@ -531,7 +531,7 @@ func handleQuery(args []string, f Flags) {
 
 		// --why-trust <id>: provenance mode — explain how a claim's trust score was computed.
 		if qa.whyTrust != "" {
-			if statusErr := job.SetStatus("provenance", ""); statusErr != nil {
+			if statusErr := job.SetStatus("querying", ""); statusErr != nil { // "provenance" was never a machine state — see TestJobStatusesAreDeclaredInTheMachine
 				return statusErr
 			}
 			report, provErr := engine.WhyTrustClaim(ctx, qa.whyTrust)
@@ -1181,7 +1181,19 @@ func handleProcess(args []string, f Flags) {
 func handleQuality(f Flags) {
 	err := runJob("quality", map[string]string{}, f.Verbose, func(ctx context.Context, job *workflow.Job, w *govwrite.Writer) error {
 		conn := w.Conn()
-		if err := job.SetStatus("computing", ""); err != nil {
+		// "querying", not "computing". The workflow machine has no `computing`
+		// state, so this call failed on every single invocation — `mnemos quality`
+		// has never run for anyone, exiting with
+		// "invalid workflow status transition: running -> computing" rather than
+		// anything that names the command or suggests a fix.
+		//
+		// `querying` is the right existing state, not merely an available one:
+		// this job's work is a read-side aggregate over the query engine, and
+		// `running -> querying` is already a declared transition. Every other
+		// command uses the machine's established vocabulary (loading, extracting,
+		// relating, saving, embedding); this was the one site that invented a
+		// status, and inventing one is what broke it.
+		if err := job.SetStatus("querying", ""); err != nil {
 			return err
 		}
 
