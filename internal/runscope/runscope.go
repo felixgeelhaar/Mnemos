@@ -16,7 +16,7 @@ import (
 	"go.klarlabs.de/mnemos/internal/store"
 )
 
-// checkEventRunsAllowed returns ("", nil) when every supplied event
+// CheckEventRunsAllowed returns ("", nil) when every supplied event
 // id maps to a run_id present in the allowed whitelist, otherwise
 // it returns the first offending (eventID, runID) pair.
 //
@@ -66,7 +66,7 @@ func CheckEventRunsAllowed(ctx context.Context, conn *store.Conn, eventIDs []str
 	return "", "", nil
 }
 
-// claimEventIDs returns the de-duplicated set of event ids that the
+// ClaimEventIDs returns the de-duplicated set of event ids that the
 // given claim ids are linked to via claim_evidence. Used to derive
 // the run-id surface for run-scope enforcement on relationship and
 // embedding writes that reference claims rather than events directly.
