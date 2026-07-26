@@ -61,6 +61,7 @@ const (
 	actionWriteRelationships = "write_relationships"
 	actionWriteEmbedding     = "write_embedding"
 	actionPruneRelationships = "prune_relationships"
+	actionDropRelationships  = "drop_relationships"
 	actionWriteAction        = "write_action"
 	actionWriteOutcome       = "write_outcome"
 	actionWriteLesson        = "write_lesson"
@@ -129,6 +130,8 @@ func actions() []kernel.Action {
 			Description: "Upsert claim relationships (supports/contradicts edges)."},
 		{Name: actionPruneRelationships, Effect: axidomain.EffectWriteLocal, Idempotent: true,
 			Description: "Replace the stored relationship set with the given edges, dropping the rest."},
+		{Name: actionDropRelationships, Effect: axidomain.EffectWriteLocal, Idempotent: true,
+			Description: "Remove exactly the enumerated relationship edges, retaining everything else."},
 		{Name: actionWriteEmbedding, Effect: axidomain.EffectWriteLocal, Idempotent: true,
 			Description: "Upsert a vector embedding for an entity."},
 		{Name: actionWriteAction, Effect: axidomain.EffectWriteLocal, Idempotent: true,
@@ -179,6 +182,7 @@ func executors(conn *store.Conn) map[string]axidomain.ActionExecutor {
 		kernel.ExecutorRef(actionWriteEvidenceLinks): evidenceLinksExecutor{conn: conn},
 		kernel.ExecutorRef(actionWriteRelationships): relationshipsExecutor{conn: conn},
 		kernel.ExecutorRef(actionPruneRelationships): pruneRelationshipsExecutor{conn: conn},
+		kernel.ExecutorRef(actionDropRelationships):  dropRelationshipsExecutor{conn: conn},
 		kernel.ExecutorRef(actionWriteEmbedding):     embeddingExecutor{conn: conn},
 		kernel.ExecutorRef(actionWriteAction):        actionExecutor{conn: conn},
 		kernel.ExecutorRef(actionWriteOutcome):       outcomeExecutor{conn: conn},

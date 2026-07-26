@@ -21,8 +21,8 @@ func TestPartitionStaleContradictions_LeavesNonContradictionEdgesAlone(t *testin
 		{ID: "r2", Type: domain.RelationshipTypeCauses, FromClaimID: "a", ToClaimID: "b"},
 	}
 	keep, dropped, orphaned := partitionStaleContradictions(rels, byID, nil)
-	if len(dropped) != 0 || orphaned != 0 {
-		t.Fatalf("non-contradiction edges were touched: dropped=%d orphaned=%d", len(dropped), orphaned)
+	if len(dropped) != 0 || len(orphaned) != 0 {
+		t.Fatalf("non-contradiction edges were touched: dropped=%d orphaned=%d", len(dropped), len(orphaned))
 	}
 	if len(keep) != 2 {
 		t.Errorf("kept %d edges, want 2", len(keep))
@@ -73,8 +73,8 @@ func TestPartitionStaleContradictions_DropsOrphanedEdges(t *testing.T) {
 		{ID: "r2", Type: domain.RelationshipTypeSupports, FromClaimID: "missing", ToClaimID: "a"},
 	}
 	keep, _, orphaned := partitionStaleContradictions(rels, byID, nil)
-	if orphaned != 2 {
-		t.Errorf("orphaned = %d, want 2", orphaned)
+	if len(orphaned) != 2 {
+		t.Errorf("orphaned = %d, want 2", len(orphaned))
 	}
 	if len(keep) != 0 {
 		t.Errorf("kept %d dangling edges", len(keep))
