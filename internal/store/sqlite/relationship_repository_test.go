@@ -197,3 +197,56 @@ func TestRelationshipStrength_Decay(t *testing.T) {
 		t.Errorf("no-op decay changed strength to %v", got)
 	}
 }
+
+// TestRepointEndpoint_CollisionCreatedByTheFirstUpdate is the SQLite half of a
+// cross-backend parity guard. The Postgres implementation had a real bug here
+// (see internal/store/postgres/relationship_repoint_integration_test.go): a
+// pair of opposite-direction edges between the two merging claims,
+// (T, new, old) and (T, old, new), both collapse onto (T, new, new), and
+// Postgres' pre-delete could not see the collision coming — it aborted the
+// transaction with SQLSTATE 23505 and took the whole consolidation pass down.
+//
+// SQLite survives it for a different reason: UPDATE OR IGNORE tolerates the
+// unique-index violation and the orphan sweep clears the leftovers. That is a
+// genuine behavioural difference between the two backends, so it is worth
+// pinning on this side too — otherwise a future rewrite of the SQLite path
+// (e.g. dropping OR IGNORE) reintroduces the Postgres bug here silently.
+func TestRepointEndpoint_CollisionCreatedByTheFirstUpdate(t *testing.T) {
+	db := openTestDB(t)
+	defer closeDB(db)
+
+	ctx := context.Background()
+	claimRepo := NewClaimRepository(db)
+	relRepo := NewRelationshipRepository(db)
+	now := time.Date(2026, 4, 12, 16, 0, 0, 0, time.UTC)
+
+	if err := claimRepo.Upsert(ctx, []domain.Claim{
+		{ID: "cl_old", Text: "duplicate", Type: domain.ClaimTypeFact, Confidence: 0.8, Status: domain.ClaimStatusActive, CreatedAt: now},
+		{ID: "cl_new", Text: "winner", Type: domain.ClaimTypeFact, Confidence: 0.9, Status: domain.ClaimStatusActive, CreatedAt: now},
+	}); err != nil {
+		t.Fatalf("Upsert claims error = %v", err)
+	}
+	if err := relRepo.Upsert(ctx, []domain.Relationship{
+		{ID: "rl_new_old", Type: domain.RelationshipTypeSupports, FromClaimID: "cl_new", ToClaimID: "cl_old", CreatedAt: now},
+		{ID: "rl_old_new", Type: domain.RelationshipTypeSupports, FromClaimID: "cl_old", ToClaimID: "cl_new", CreatedAt: now},
+	}); err != nil {
+		t.Fatalf("Upsert relationships error = %v", err)
+	}
+
+	if err := relRepo.RepointEndpoint(ctx, "cl_old", "cl_new"); err != nil {
+		t.Fatalf("RepointEndpoint must tolerate a collision the rewrite itself creates: %v", err)
+	}
+
+	rels, err := relRepo.ListByClaim(ctx, "cl_new")
+	if err != nil {
+		t.Fatalf("ListByClaim error = %v", err)
+	}
+	for _, r := range rels {
+		if r.FromClaimID == "cl_old" || r.ToClaimID == "cl_old" {
+			t.Errorf("edge %s still references the merged-away claim: %+v", r.ID, r)
+		}
+		if r.FromClaimID == r.ToClaimID {
+			t.Errorf("self-loop survived the repoint: %+v", r)
+		}
+	}
+}
