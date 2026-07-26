@@ -1707,7 +1707,14 @@ func appendClaimsHandler(conn *store.Conn, gw *govwrite.Writer, w http.ResponseW
 		}
 	}
 
-	if _, err := gw.Claims(ctx, claims, govwrite.ClaimReason{}); err != nil {
+	// changed_by is who PERFORMED the write (the authenticated request actor);
+	// per-claim CreatedBy authorship is already stamped on each claim above.
+	// Passing the zero value meant no status_history row at all, so anything
+	// arriving over REST had no provenance in `mnemos audit who`.
+	if _, err := gw.Claims(ctx, claims, govwrite.ClaimReason{
+		Reason:    "api: POST /v1/beliefs",
+		ChangedBy: actor,
+	}); err != nil {
 		writeInternalError(w, "upsert claims", err)
 		return
 	}
@@ -2296,7 +2303,10 @@ func makeSearchHandler(conn *store.Conn) http.HandlerFunc {
 			// zero / unknown → engine default (team)
 		}
 
-		engine := query.NewEngine(conn.Events, conn.Claims, conn.Relationships)
+		// Fully wired: embeddings, full-text, LLM, decisions. This built a bare
+		// engine and ranked by token overlap — on the path the hosted recall hook
+		// uses for every prompt.
+		engine := newQueryEngine(conn)
 		var answer domain.Answer
 		var err error
 		if req.RunID != "" {

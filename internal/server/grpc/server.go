@@ -665,7 +665,12 @@ func (s *Server) AppendBeliefs(ctx context.Context, req *mnemosv1.AppendBeliefsR
 		return nil, status.Errorf(codes.Unimplemented, "run-scoped evidence validation not yet implemented for gRPC")
 	}
 
-	if _, err := s.writerFor(ctx).Claims(ctx, claims, govwrite.ClaimReason{}); err != nil {
+	// Same attribution as the REST and CLI write paths; the zero value left
+	// gRPC-written claims with no status_history row.
+	if _, err := s.writerFor(ctx).Claims(ctx, claims, govwrite.ClaimReason{
+		Reason:    "grpc: AppendBeliefs",
+		ChangedBy: actor,
+	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "upsert beliefs: %v", err)
 	}
 

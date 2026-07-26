@@ -1198,23 +1198,12 @@ func mcpRunQuery(ctx context.Context, input mcpQueryInput) (mcpQueryOutput, erro
 	}
 	defer closeConn(conn)
 
-	engine := query.NewEngine(conn.Events, conn.Claims, conn.Relationships)
-
-	// Enable semantic ranking when an embedding provider is configured —
-	// auto-detected via Ollama or env vars. Without this the engine falls
-	// back to token-overlap ranking and semantic matches are missed even
-	// when the DB has embeddings.
-	if embCfg, err := embedding.ConfigFromEnv(); err == nil {
-		if embClient, err := embedding.NewClient(embCfg); err == nil {
-			engine = engine.WithEmbeddings(conn.Embeddings, embClient)
-		}
-	}
-
-	if llmCfg, err := llm.ConfigFromEnv(); err == nil {
-		if llmClient, err := llm.NewClient(llmCfg); err == nil {
-			engine = engine.WithLLM(llmClient)
-		}
-	}
+	// Shared builder: embeddings AND the full-text leg AND decisions. The
+	// hand-rolled chain here wired embeddings and the LLM but never
+	// WithTextSearch, so MCP recall lost the sparse (BM25/FTS) leg that nails
+	// exact tokens — SHAs, service names, error codes — which dense retrieval
+	// blurs. Capability detection lives in one place now.
+	engine := newQueryEngine(conn)
 
 	hops := input.Hops
 	if hops < 0 {
@@ -1226,7 +1215,11 @@ func mcpRunQuery(ctx context.Context, input mcpQueryInput) (mcpQueryOutput, erro
 	// Cognitive retrieval is ON here, not just in the CLI. Before this, MCP
 	// built AnswerOptions without the five behaviours, so every recall through
 	// Claude Code got none of them and no env var could change it.
-	opts := query.AnswerOptions{Hops: hops}.WithCognitiveDefaults()
+	// Consumer=agent, because the caller IS one. This gates more than it looks:
+	// verdicts are only produced for an agent consumer, and inhibition
+	// (ADR 0016) returns early without verdicts — so leaving it unset made
+	// Inhibit a no-op here no matter what the env said.
+	opts := query.AnswerOptions{Hops: hops, Consumer: domain.ConsumerAgent}.WithCognitiveDefaults()
 
 	var answer domain.Answer
 	if strings.TrimSpace(input.RunID) != "" {

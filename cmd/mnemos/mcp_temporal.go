@@ -179,7 +179,8 @@ func mcpRunRecallAtTime(ctx context.Context, input mcpRecallAtTimeInput) (mcpQue
 	}
 	defer closeConn(conn)
 
-	engine := query.NewEngine(conn.Events, conn.Claims, conn.Relationships)
+	// Same full wiring as query_knowledge — a time-scoped recall is still a recall.
+	engine := newQueryEngine(conn)
 	if embCfg, embErr := embedding.ConfigFromEnv(); embErr == nil {
 		if embClient, ecErr := embedding.NewClient(embCfg); ecErr == nil {
 			engine = engine.WithEmbeddings(conn.Embeddings, embClient)
@@ -194,8 +195,9 @@ func mcpRunRecallAtTime(ctx context.Context, input mcpRecallAtTimeInput) (mcpQue
 	hops := max(input.Hops, 0)
 	hops = min(hops, 5)
 	opts := query.AnswerOptions{
-		Hops: hops,
-		AsOf: asOf.UTC(),
+		Hops:     hops,
+		AsOf:     asOf.UTC(),
+		Consumer: domain.ConsumerAgent,
 	}.WithCognitiveDefaults()
 
 	var answer domain.Answer

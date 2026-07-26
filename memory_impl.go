@@ -546,6 +546,7 @@ func (m *memory) recall(ctx context.Context, q Query) ([]Result, domain.Answer, 
 		RecordedAsOf:   q.RecordedAsOf,
 		IncludeHistory: q.IncludeHistory,
 		Lifecycle:      domain.ClaimLifecycle(q.Lifecycle),
+		Consumer:       consumerMode(q.AgentConsumer),
 	}.WithCognitiveDefaults()
 
 	var ans domain.Answer
@@ -2584,4 +2585,16 @@ func (a *embedderAdapter) ModelID() string {
 		return mi.ModelID()
 	}
 	return ""
+}
+
+// consumerMode maps the public Query.AgentConsumer switch onto the engine's
+// consumer mode. Kept as a function so the zero value has one obvious meaning:
+// a caller that says nothing gets contradictions explained, not silently
+// resolved on its behalf.
+func consumerMode(agent bool) domain.Consumer {
+	if agent {
+		return domain.ConsumerAgent
+	}
+
+	return domain.ConsumerUser
 }

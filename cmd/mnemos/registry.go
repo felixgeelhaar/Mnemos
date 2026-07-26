@@ -639,7 +639,15 @@ func persistPulledClaims(ctx context.Context, gw *govwrite.Writer, claims []clai
 			CreatedAt:  ts,
 		})
 	}
-	if _, err := gw.Claims(ctx, domClaims, govwrite.ClaimReason{}); err != nil {
+	// Attribute the pull. govwrite's ClaimReason doc names this path as one
+	// that "relies on this" — and it passed the zero value, so a federated
+	// claim landed with no status_history row at all. `mnemos audit who` and
+	// the trust narrative then show no provenance for anything pulled: the
+	// read succeeds, the trail is simply absent.
+	if _, err := gw.Claims(ctx, domClaims, govwrite.ClaimReason{
+		Reason:    "federation: registry pull",
+		ChangedBy: "registry",
+	}); err != nil {
 		return 0, fmt.Errorf("upsert claims: %w", err)
 	}
 	links := make([]domain.ClaimEvidence, 0, len(evidence))

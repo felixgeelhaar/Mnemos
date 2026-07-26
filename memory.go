@@ -263,6 +263,18 @@ type Query struct {
 	// (the default) disables the filter: ordinary claims that were never
 	// routed through a candidate→promoted review still appear.
 	Lifecycle ClaimLifecycle
+
+	// AgentConsumer requests automatic contradiction resolution: the
+	// trust-scoring engine picks a winner, the loser is demoted, and
+	// Answer.AutoResolved is set. False (the default) surfaces contradictions
+	// with a human-readable explanation instead.
+	//
+	// It also gates ADR 0016 competitive inhibition, which suppresses a beaten
+	// loser's retrievability — inhibition acts on a decided loser, so without
+	// an adjudicating consumer there is nothing for it to act on. This field
+	// did not exist, which made inhibition unreachable from the embedded
+	// library entirely: the path every consuming product takes.
+	AgentConsumer bool
 }
 
 // Claim is the stable, read-only projection of a stored claim returned by
