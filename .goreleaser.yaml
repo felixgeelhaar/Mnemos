@@ -51,7 +51,7 @@ homebrew_casks:
   - ids:
       - bundles
     repository:
-      owner: klarlabs-studio
+      owner: felixgeelhaar
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/klarlabs-studio/mnemos
