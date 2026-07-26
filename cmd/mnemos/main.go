@@ -1944,7 +1944,7 @@ func runJob(kind string, scope map[string]string, verbose bool, fn func(context.
 	// The writer owns the store connection (opened here, closed below).
 	w, err := openWriter(context.Background())
 	if err != nil {
-		return NewSystemError(err, "failed to open database at %q", resolveDSN())
+		return NewSystemError(err, "failed to open database at %q", displayDSN())
 	}
 	defer closeWriter(w)
 

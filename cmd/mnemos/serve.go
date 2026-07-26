@@ -175,7 +175,7 @@ func handleServe(args []string, _ Flags) {
 	// are opened by tenantScopeMiddleware. openBaseConn never fail-closes.
 	conn, err := openBaseConn(context.Background())
 	if err != nil {
-		exitWithMnemosError(false, NewSystemError(err, "failed to open database at %q", dsn))
+		exitWithMnemosError(false, NewSystemError(err, "failed to open database at %q", store.RedactDSN(dsn)))
 		return
 	}
 	defer closeConn(conn)

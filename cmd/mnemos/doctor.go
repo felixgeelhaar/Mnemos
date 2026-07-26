@@ -200,7 +200,7 @@ func probeDoctorDB(ctx context.Context) (healthCheck, *store.Conn) {
 	dsn := displayDSN()
 	conn, err := openConn(ctx)
 	if err != nil {
-		return healthCheck{Name: "store_open", Status: "failed", Detail: fmt.Sprintf("dsn=%s: %s", dsn, err.Error())}, nil
+		return healthCheck{Name: "store_open", Status: "failed", Detail: fmt.Sprintf("dsn=%s: %s", store.RedactDSN(dsn), err.Error())}, nil
 	}
 	return healthCheck{Name: "store_open", Status: "ok", Detail: dsn}, conn
 }
