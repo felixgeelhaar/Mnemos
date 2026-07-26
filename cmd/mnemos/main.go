@@ -1489,7 +1489,7 @@ func printUsage() {
 	fmt.Println("  reset [--keep-events] [--yes]        Wipe claims/relationships/embeddings (events optional)")
 	fmt.Println("  delete-claim <id> [<id>...] [--yes]  Delete specific claims and their derived state")
 	fmt.Println("  delete-event <id> [<id>...] [--yes]  Delete events and cascade to derived claims")
-	fmt.Println("  reembed [--force] [--dry-run]        (Re)generate claim embeddings under the current embed config")
+	fmt.Println("  reembed [--force] [--dry-run]        (Re)generate claim + event embeddings under the current embed config")
 	fmt.Println("  recompute-trust [--all]              Rebuild trust_score for every claim under the current policy")
 	fmt.Println("  recompute-contested [--dry-run]      Clear contested status the current heuristic no longer assigns")
 	fmt.Println("  dedup [--threshold T] [--force]      Merge near-duplicate claims by embedding similarity (dry-run by default)")
