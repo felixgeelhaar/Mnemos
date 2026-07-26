@@ -31,7 +31,7 @@ func TestListClaimsFiltered_NoFiltersReturnsAllOrderedByCreatedDesc(t *testing.T
 	seedClaimConn(t, conn, "c1", "older", "fact", "active", 0.7, now.Add(-2*time.Hour))
 	seedClaimConn(t, conn, "c2", "newer", "decision", "active", 0.9, now)
 
-	claims, total, err := listClaimsFiltered(context.Background(), conn, "", "", 50, 0)
+	claims, total, err := listClaimsFiltered(context.Background(), conn, "", "", "", 50, 0)
 	if err != nil {
 		t.Fatalf("listClaimsFiltered: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestListClaimsFiltered_TypeFilter(t *testing.T) {
 	seedClaimConn(t, conn, "c2", "decision 1", "decision", "active", 0.9, now)
 	seedClaimConn(t, conn, "c3", "decision 2", "decision", "active", 0.8, now)
 
-	claims, total, err := listClaimsFiltered(context.Background(), conn, "decision", "", 50, 0)
+	claims, total, err := listClaimsFiltered(context.Background(), conn, "decision", "", "", 50, 0)
 	if err != nil {
 		t.Fatalf("listClaimsFiltered: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestListClaimsFiltered_StatusFilter(t *testing.T) {
 	seedClaimConn(t, conn, "c1", "active claim", "fact", "active", 0.7, now)
 	seedClaimConn(t, conn, "c2", "contested claim", "fact", "contested", 0.5, now)
 
-	claims, total, err := listClaimsFiltered(context.Background(), conn, "", "contested", 50, 0)
+	claims, total, err := listClaimsFiltered(context.Background(), conn, "", "contested", "", 50, 0)
 	if err != nil {
 		t.Fatalf("listClaimsFiltered: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestListClaimsFiltered_Pagination(t *testing.T) {
 		seedClaimConn(t, conn, "c"+string(rune('1'+i)), "claim", "fact", "active", 0.5, base.Add(time.Duration(i)*time.Minute))
 	}
 
-	page1, total, err := listClaimsFiltered(context.Background(), conn, "", "", 2, 0)
+	page1, total, err := listClaimsFiltered(context.Background(), conn, "", "", "", 2, 0)
 	if err != nil {
 		t.Fatalf("page1: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestListClaimsFiltered_Pagination(t *testing.T) {
 		t.Fatalf("page1 len = %d, want 2", len(page1))
 	}
 
-	page2, _, err := listClaimsFiltered(context.Background(), conn, "", "", 2, 2)
+	page2, _, err := listClaimsFiltered(context.Background(), conn, "", "", "", 2, 2)
 	if err != nil {
 		t.Fatalf("page2: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestListContradictionPairs_HydratesClaimText(t *testing.T) {
 	seedRelationshipConn(t, conn, "r1", "contradicts", "c1", "c2", now)
 	seedRelationshipConn(t, conn, "r2", "supports", "c1", "c3", now) // not a contradiction
 
-	pairs, total, err := listContradictionPairs(context.Background(), conn, 50, 0)
+	pairs, total, err := listContradictionPairs(context.Background(), conn, "", 50, 0)
 	if err != nil {
 		t.Fatalf("listContradictionPairs: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestListContradictionPairs_HandlesMissingClaimGracefully(t *testing.T) {
 	seedClaimConn(t, conn, "c2", "other claim", "fact", "active", 0.5, now)
 	seedRelationshipConn(t, conn, "r1", "contradicts", "c1", "c2", now)
 
-	pairs, _, err := listContradictionPairs(context.Background(), conn, 50, 0)
+	pairs, _, err := listContradictionPairs(context.Background(), conn, "", 50, 0)
 	if err != nil {
 		t.Fatalf("listContradictionPairs: %v", err)
 	}

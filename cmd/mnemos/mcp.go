@@ -329,57 +329,65 @@ func handleMCP(args []string) {
 	// watch_file uses a long-lived DB connection separate from the
 	// per-call connections in the other handlers. Opened lazily so
 	// startup doesn't fail just because the watcher isn't needed.
-	// We also remember the DB handle so the shutdown defer can close
+	// lazyWatcher also remembers the DB handle so the shutdown defer can close
 	// it after stopping the polling goroutine — without this the
-	// watcher leaks a connection on every MCP exit.
-	var (
-		watcherOnce sync.Once
-		watcher     *Watcher
-		watcherConn *store.Conn
-		watcherErr  error
-	)
+	// watcher leaks a connection on every MCP exit — and guards both with a
+	// mutex so the request goroutines that build it and the main goroutine
+	// that tears it down are properly ordered.
+	//
+	// The watch root is resolved once here, before any request can be served,
+	// so a later chdir cannot widen what watch_file may reach.
+	watchRoot := resolveWatchRoot()
+	var watcherState lazyWatcher
 	getWatcher := func() (*Watcher, error) {
-		watcherOnce.Do(func() {
+		return watcherState.get(func() (*Watcher, *store.Conn, error) {
 			// Background context is fine here: the open is a one-shot
 			// per process and the long-lived Conn lifecycle is governed
-			// by the deferred closeConn below, not by request-scoped
+			// by watcherState.shutdown below, not by request-scoped
 			// cancellation.
 			conn, err := openConn(context.Background())
 			if err != nil {
-				watcherErr = err
-				return
+				return nil, nil, err
 			}
-			watcherConn = conn
 			// Wrap the long-lived conn in a governed writer so the
 			// watcher's re-ingest writes route through the kernel. The
-			// writer borrows the conn; closeConn below still owns it.
+			// writer borrows the conn; watcherState still owns it.
 			gw, gwErr := govwrite.Wrap(conn, logger)
 			if gwErr != nil {
-				watcherErr = gwErr
-				return
+				return nil, conn, gwErr
 			}
-			watcher = NewWatcher(gw, mcpActor)
+			return NewWatcher(gw, mcpActor, watchRoot), conn, nil
 		})
-		return watcher, watcherErr
 	}
 
 	// Lazily build the library Memory facade for the cognitive tools (who-knows,
 	// knowledge-gaps, calibration, …). Built once, reused across tool calls, and
 	// closed by the shutdown defer below.
+	//
+	// memMu guards the whole set — the base facade included. It used to be a
+	// sync.Once, which publishes memFacade only to goroutines that call Do; the
+	// shutdown defer below reads it without calling Do, so under `mcp --http`
+	// (build on a request goroutine, close on main) that was the same
+	// unsynchronised read as the watcher's.
 	var (
-		memOnce    sync.Once
+		memMu      sync.Mutex
+		memBuilt   bool
 		memFacade  mnemos.Memory
 		memErr     error
-		tenantMu   sync.Mutex
 		tenantMems = map[string]mnemos.Memory{}
 	)
 	// getMem returns the cognitive-layer Memory for a request. In multi-tenant
 	// mode it returns a per-tenant view (memFacade.Tenant), cached so each
 	// tenant reuses one pool for the life of the server.
 	getMem := func(ctx context.Context) (mnemos.Memory, error) {
+		memMu.Lock()
+		defer memMu.Unlock()
 		// Base (unscoped) facade uses the plain DSN — never fail-closed — since
 		// in multi-tenant mode it is only a handle to call .Tenant(id) on.
-		memOnce.Do(func() { memFacade, memErr = newLibraryMemoryForDSN(resolveDSN(), mcpActor) })
+		if !memBuilt {
+			memBuilt = true
+			memFacade, memErr = newLibraryMemoryForDSN(resolveDSN(), mcpActor)
+		}
 		if memErr != nil {
 			return nil, memErr
 		}
@@ -392,8 +400,6 @@ func handleMCP(args []string) {
 			}
 			return memFacade, nil
 		}
-		tenantMu.Lock()
-		defer tenantMu.Unlock()
 		if m, cached := tenantMems[tenant]; cached {
 			return m, nil
 		}
@@ -566,7 +572,7 @@ func handleMCP(args []string) {
 		})
 
 	srv.Tool("watch_file").
-		Description("Register a file to be re-ingested when its content changes. Polls every few seconds; in-memory only — restart drops all watches.").
+		Description("Register a file to be re-ingested when its content changes. Polls every few seconds; in-memory only — restart drops all watches. The path must live inside the server's project root (or working directory); paths outside it, including via symlink, are refused.").
 		OutputSchema(mcpWatchFileOutput{}).
 		Handler(func(ctx context.Context, input mcpWatchFileInput) (mcpWatchFileOutput, error) {
 			// watch_file re-ingests a server-local file through a process
@@ -858,20 +864,15 @@ func handleMCP(args []string) {
 	// DB connection it holds gets released. Cheap if no watcher was
 	// ever started.
 	defer func() {
-		if watcher != nil {
-			watcher.Stop()
-		}
-		if watcherConn != nil {
-			_ = watcherConn.Close()
-		}
+		watcherState.shutdown()
+		memMu.Lock()
 		if memFacade != nil {
 			_ = memFacade.Close()
 		}
-		tenantMu.Lock()
 		for _, tm := range tenantMems {
 			_ = tm.Close()
 		}
-		tenantMu.Unlock()
+		memMu.Unlock()
 		closeConnCache()
 	}()
 
@@ -1451,6 +1452,13 @@ func mcpRunMetrics(ctx context.Context) (mcpMetricsOutput, error) {
 }
 
 func mcpRunRecordAction(ctx context.Context, actor string, input mcpRecordActionInput) (mcpRecordActionOutput, error) {
+	// record_action persists input.RunID verbatim on the Action, so it is a
+	// run-carrying write and gets the same guard as every other one: a run
+	// outside the token's allowlist is denied, and a run-restricted token may
+	// not write an unscoped (empty-run) Action either.
+	if err := enforceRunScope(ctx, input.RunID); err != nil {
+		return mcpRecordActionOutput{}, err
+	}
 	at := time.Now().UTC()
 	if strings.TrimSpace(input.At) != "" {
 		t, err := parseTimeArg(input.At)

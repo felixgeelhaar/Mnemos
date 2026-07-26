@@ -12,7 +12,9 @@ import (
 	_ "go.klarlabs.de/mnemos/internal/store/sqlite"
 )
 
-func newTestWatcher(t *testing.T) *Watcher {
+// newTestWatcher returns a watcher rooted at root. Pass "" to root it at a
+// fresh temp dir the caller does not otherwise use.
+func newTestWatcher(t *testing.T, root string) *Watcher {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "mnemos.db")
 	conn, err := store.Open(context.Background(), "sqlite://"+dbPath)
@@ -26,7 +28,10 @@ func newTestWatcher(t *testing.T) *Watcher {
 		t.Fatalf("wrap governed writer: %v", err)
 	}
 	t.Cleanup(func() { _ = gw.Close() })
-	w := NewWatcher(gw, "")
+	if root == "" {
+		root = t.TempDir()
+	}
+	w := NewWatcher(gw, "", root)
 	t.Cleanup(w.Stop)
 	return w
 }
@@ -43,8 +48,8 @@ func rawDB(t *testing.T, w *Watcher) *sql.DB {
 }
 
 func TestWatcher_AddRecordsHashAndCount(t *testing.T) {
-	w := newTestWatcher(t)
 	dir := t.TempDir()
+	w := newTestWatcher(t, dir)
 	path := filepath.Join(dir, "README.md")
 	writeFile(t, path, "initial content")
 
@@ -61,15 +66,17 @@ func TestWatcher_AddRecordsHashAndCount(t *testing.T) {
 }
 
 func TestWatcher_AddNonExistentFileFails(t *testing.T) {
-	w := newTestWatcher(t)
-	if _, err := w.Add(filepath.Join(t.TempDir(), "missing.md")); err == nil {
+	dir := t.TempDir()
+	w := newTestWatcher(t, dir)
+	if _, err := w.Add(filepath.Join(dir, "missing.md")); err == nil {
 		t.Fatal("expected error for missing file")
 	}
 }
 
 func TestWatcher_TickSkipsWhenContentUnchanged(t *testing.T) {
-	w := newTestWatcher(t)
-	path := filepath.Join(t.TempDir(), "doc.md")
+	dir := t.TempDir()
+	w := newTestWatcher(t, dir)
+	path := filepath.Join(dir, "doc.md")
 	writeFile(t, path, "stable")
 	if _, err := w.Add(path); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -90,8 +97,9 @@ func TestWatcher_TickSkipsWhenContentUnchanged(t *testing.T) {
 }
 
 func TestWatcher_TickReingestsOnContentChange(t *testing.T) {
-	w := newTestWatcher(t)
-	path := filepath.Join(t.TempDir(), "doc.md")
+	dir := t.TempDir()
+	w := newTestWatcher(t, dir)
+	path := filepath.Join(dir, "doc.md")
 	writeFile(t, path, "We use SQLite. The pipeline is event-sourced.")
 	if _, err := w.Add(path); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -120,8 +128,9 @@ func TestWatcher_TickReingestsOnContentChange(t *testing.T) {
 }
 
 func TestWatcher_TickDropsMissingFile(t *testing.T) {
-	w := newTestWatcher(t)
-	path := filepath.Join(t.TempDir(), "doomed.md")
+	dir := t.TempDir()
+	w := newTestWatcher(t, dir)
+	path := filepath.Join(dir, "doomed.md")
 	writeFile(t, path, "soon to be deleted")
 	if _, err := w.Add(path); err != nil {
 		t.Fatalf("Add: %v", err)
@@ -140,7 +149,7 @@ func TestWatcher_TickDropsMissingFile(t *testing.T) {
 }
 
 func TestWatcher_StopIsIdempotent(t *testing.T) {
-	w := newTestWatcher(t)
+	w := newTestWatcher(t, "")
 	w.Stop()
 	w.Stop() // second call must not panic
 }

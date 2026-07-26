@@ -165,20 +165,48 @@ func registerClaudeCode(bin, dsn, scope string, inlineDSN, force, printOnly bool
 	return nil
 }
 
+// tokenHeaderPlaceholder is the Authorization header value written into Claude
+// Code's MCP registration when the hosted endpoint needs a bearer token.
+//
+// The literal JWT is deliberately NOT used. It used to be interpolated into
+// the `claude mcp add --header …` argv, which puts a live credential in the
+// process table for any local user to read with `ps`, echoed the same string
+// to stdout on the print / claude-not-found path (shell history, CI logs), and
+// then left it at rest in Claude's own config — contradicting the documented
+// invariant that the hosted token lives only in the 0600 mnemos config. The
+// placeholder keeps the registration shape identical while the secret stays in
+// that one file; Claude Code expands ${MNEMOS_TOKEN} from the environment when
+// it connects, and `mnemos`'s own config loader already exports exactly that
+// variable from the `server.token` key.
+const tokenHeaderPlaceholder = "Authorization: Bearer ${MNEMOS_TOKEN}"
+
+// claudeHTTPAddArgs builds the `claude mcp add` argv for a remote endpoint.
+// Split out from registerClaudeCodeHTTP so a test can assert the credential
+// never reaches the process table: the token argument decides *whether* an
+// Authorization header is registered, never *what* is in it.
+func claudeHTTPAddArgs(url, token, scope string) []string {
+	args := []string{"mcp", "add", "--scope", scope, "--transport", "http", "mnemos", url}
+	if token != "" {
+		args = append(args, "--header", tokenHeaderPlaceholder)
+	}
+	return args
+}
+
 // registerClaudeCodeHTTP registers a REMOTE Mnemos MCP server (HTTP transport)
-// in Claude Code, for a hosted `mnemos mcp --http` endpoint. The bearer token,
-// when given, is sent as an Authorization header.
+// in Claude Code, for a hosted `mnemos mcp --http` endpoint. When the endpoint
+// needs a bearer token the registration carries a ${MNEMOS_TOKEN} placeholder
+// header rather than the credential itself — see tokenHeaderPlaceholder.
 func registerClaudeCodeHTTP(url, token, scope string, force, printOnly bool) error {
 	claude, lookErr := exec.LookPath("claude")
 
-	addArgs := []string{"mcp", "add", "--scope", scope, "--transport", "http", "mnemos", url}
-	if token != "" {
-		addArgs = append(addArgs, "--header", "Authorization: Bearer "+token)
-	}
+	addArgs := claudeHTTPAddArgs(url, token, scope)
 
 	if printOnly || lookErr != nil {
 		fmt.Println("Register the remote MCP server by running:")
 		fmt.Printf("  claude %s\n", strings.Join(addArgs, " "))
+		if token != "" {
+			printTokenEnvNote()
+		}
 		return nil
 	}
 
@@ -195,7 +223,22 @@ func registerClaudeCodeHTTP(url, token, scope string, force, printOnly bool) err
 		return NewSystemError(err, "failed to register remote MCP server:\n%s", strings.TrimSpace(out))
 	}
 	fmt.Println("✓ registered remote mnemos MCP server with Claude Code")
+	if token != "" {
+		printTokenEnvNote()
+	}
 	return nil
+}
+
+// printTokenEnvNote explains how the placeholder header resolves. Printed
+// instead of the token, never alongside it.
+func printTokenEnvNote() {
+	fmt.Println()
+	fmt.Println("  The registration references ${MNEMOS_TOKEN} instead of embedding your token,")
+	fmt.Println("  so the credential is never placed on a command line or in Claude's config.")
+	fmt.Println("  Export it in the shell you launch Claude Code from:")
+	fmt.Println("      export MNEMOS_TOKEN=<your token>")
+	fmt.Println("  The token itself is stored under `server.token` in the 0600 mnemos config")
+	fmt.Println("  written above; the recall/brief/capture hooks read it from there already.")
 }
 
 // mcpServerExists reports whether Claude Code already knows a server named
