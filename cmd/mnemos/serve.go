@@ -29,6 +29,7 @@ import (
 	markdownpkg "go.klarlabs.de/mnemos/internal/markdown"
 	"go.klarlabs.de/mnemos/internal/ports"
 	"go.klarlabs.de/mnemos/internal/query"
+	"go.klarlabs.de/mnemos/internal/runscope"
 	mnemosgrpc "go.klarlabs.de/mnemos/internal/server/grpc"
 	"go.klarlabs.de/mnemos/internal/store"
 	"google.golang.org/grpc"
@@ -1696,7 +1697,7 @@ func appendClaimsHandler(conn *store.Conn, gw *govwrite.Writer, w http.ResponseW
 		for _, e := range req.Evidence {
 			eventIDs = append(eventIDs, e.EventID)
 		}
-		bad, badRun, err := checkEventRunsAllowed(ctx, conn, eventIDs, allowed)
+		bad, badRun, err := runscope.CheckEventRunsAllowed(ctx, conn, eventIDs, allowed)
 		if err != nil {
 			writeInternalError(w, "run-scope check", err)
 			return
@@ -1793,12 +1794,12 @@ func appendRelationshipsHandler(conn *store.Conn, gw *govwrite.Writer, w http.Re
 				claimIDs = append(claimIDs, id)
 			}
 		}
-		evIDs, err := claimEventIDs(r.Context(), conn, claimIDs)
+		evIDs, err := runscope.ClaimEventIDs(r.Context(), conn, claimIDs)
 		if err != nil {
 			writeInternalError(w, "run-scope lookup", err)
 			return
 		}
-		bad, badRun, err := checkEventRunsAllowed(r.Context(), conn, evIDs, allowed)
+		bad, badRun, err := runscope.CheckEventRunsAllowed(r.Context(), conn, evIDs, allowed)
 		if err != nil {
 			writeInternalError(w, "run-scope check", err)
 			return
@@ -1927,13 +1928,13 @@ func appendEmbeddingsHandler(conn *store.Conn, gw *govwrite.Writer, w http.Respo
 				claimIDs = append(claimIDs, e.EntityID)
 			}
 		}
-		extraEvents, err := claimEventIDs(ctx, conn, claimIDs)
+		extraEvents, err := runscope.ClaimEventIDs(ctx, conn, claimIDs)
 		if err != nil {
 			writeInternalError(w, "run-scope lookup", err)
 			return
 		}
 		eventIDs = append(eventIDs, extraEvents...)
-		bad, badRun, err := checkEventRunsAllowed(ctx, conn, eventIDs, allowed)
+		bad, badRun, err := runscope.CheckEventRunsAllowed(ctx, conn, eventIDs, allowed)
 		if err != nil {
 			writeInternalError(w, "run-scope check", err)
 			return
