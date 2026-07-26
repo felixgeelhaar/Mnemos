@@ -8,6 +8,44 @@ notable changes.
 
 ## [Unreleased]
 
+## [0.117.0] — 2026-07-26
+
+### Added
+
+- **`mnemos reembed` now covers events, not just claims.** The store loop
+  hardcoded entity type `claim`, and event vectors are written only by the
+  ingest pipeline — so changing the embedding model stranded every event
+  embedding in the old space with no way to migrate it. Recall is
+  model-filtered, so those rows did not error; they went silently dark and
+  stayed dark short of re-ingesting the corpus. `--force` now re-embeds both
+  types; without it, events are diffed against the stored event embeddings.
+- **Provider calls are batched** (64 per request, `MNEMOS_EMBED_BATCH` to
+  override). `reembed` previously sent the entire corpus in one call. That is
+  fine against OpenAI and fails against a self-hosted TEI/Infinity sidecar,
+  whose max-batch and max-token budgets are much smaller — i.e. it broke on
+  precisely the migration it exists to perform.
+
+### Fixed
+
+- **Memory consolidation aborted on every run against Postgres.**
+  `RepointEndpoint` cleared conflicting edges with two pre-deletes, both
+  evaluated before either `UPDATE` ran — unsound, because rewriting
+  `from_claim_id` changes which rows the `to_claim_id` rewrite collides with. A
+  pair of opposite-direction edges between the merging claims was enough: both
+  pre-deletes looked for an edge the rewrite had not created yet. The resulting
+  unique-index violation took the whole transaction down, so nothing merged at
+  all — while the job still logged `memory consolidation complete` and exited 0.
+  The collision set is now computed on the post-rewrite identity in a single
+  statement, making it independent of update order. SQLite was never affected
+  (`UPDATE OR IGNORE`); the same scenario is now pinned there too.
+- **`reembed` no longer reports success after a short batch.** The store loop
+  did `if i >= len(vectors) { break }` and then printed `len(vectors)` as its
+  count, so a provider honouring only part of a batch left rows unembedded while
+  the command exited 0. An unembedded row is invisible to model-filtered recall
+  and indistinguishable from one that simply does not match, so there was no
+  symptom to notice. It is now an error that reports how far it got.
+- **Gemini API keys are sent as a header, not in the URL** (#276).
+
 ## [0.116.1] — 2026-07-24
 
 ### Fixed
