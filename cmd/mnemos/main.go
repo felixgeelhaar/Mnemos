@@ -148,12 +148,9 @@ func main() {
 		printProgress("config: loaded %s (%d value(s) applied)", path, len(applied))
 	}
 
-	// Opt-in additive episodic event typing (ADR 0023 part 2). Off unless the
-	// operator turns it on; see internal/pipeline.EnableEpisodicTagging.
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("MNEMOS_EPISODIC_EVENTS"))) {
-	case "1", "true", "yes":
-		pipeline.EnableEpisodicTagging = true
-	}
+	// Episodic event typing (ADR 0023 part 2) is read inside internal/pipeline
+	// now, so every entrypoint honours MNEMOS_EPISODIC_EVENTS — not just this
+	// one. Assigning it here made the embedded library ignore the variable.
 
 	// Validate the read-time precedence policy (ADR 0011 Phase C) once the
 	// config is hydrated, so an unrecognized MNEMOS_PRECEDENCE fails fast with a
