@@ -13,9 +13,14 @@ AI agents forget everything the moment a session ends. Mnemos gives them a memor
 If you use an AI coding assistant like **Claude Code**, one command wires Mnemos in through its hooks: it recalls relevant knowledge before each task, captures what was learned at session end, and consolidates on a nightly "sleep" cycle — with nothing to call.
 
 ```bash
-brew install klarlabs-studio/tap/mnemos
+brew trust klarlabs-studio/tap        # first time only
+brew install --cask klarlabs-studio/tap/mnemos
 mnemos init
 ```
+
+Homebrew refuses to load a cask from a third-party tap it has not been told
+to trust, so the first install of anything from this tap needs
+`brew trust klarlabs-studio/tap` once — per machine, not per tool.
 
 That's it. Your agent now remembers your decisions, the bug you fixed last month, and why you chose Postgres over the alternative — across sessions, projects, and machines, because the brain is yours and lives where you put it.
 
@@ -59,7 +64,8 @@ That's the whole API for the simple case. For richer memory — typed claims, co
 
 ```bash
 # macOS / Linux (Homebrew)
-brew install klarlabs-studio/tap/mnemos
+brew trust klarlabs-studio/tap        # first time only
+brew install --cask klarlabs-studio/tap/mnemos
 
 # Go (any platform with Go 1.26+)
 go install go.klarlabs.de/mnemos/cmd/mnemos@latest
