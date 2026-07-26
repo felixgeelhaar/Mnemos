@@ -572,6 +572,14 @@ func handleQuery(args []string, f Flags) {
 			Hebbian:       qa.hebbian,
 			Reconsolidate: qa.reconsolidate,
 			Inhibit:       qa.inhibit,
+			// Inhibition suppresses a contradiction's beaten LOSER, so something
+			// must have adjudicated a winner first — and verdicts are only
+			// produced for an agent consumer. Without this, `--inhibit` parsed,
+			// set the flag, and did nothing whatsoever.
+			//
+			// A person reading output otherwise wants the contradiction
+			// explained rather than silently resolved: that is ConsumerUser.
+			Consumer: consumerFor(qa.inhibit),
 		}.WithCognitiveDefaults()
 		if entity != "" {
 			entRepo := conn.Entities
@@ -913,7 +921,12 @@ func handleExtract(args []string, f Flags) {
 			return err
 		}
 		stampClaimActor(claims, actor)
-		if _, err := w.Claims(ctx, claims, govwrite.ClaimReason{}); err != nil {
+		// Stamping CreatedBy and then discarding the reason left no
+		// status_history row for CLI ingest.
+		if _, err := w.Claims(ctx, claims, govwrite.ClaimReason{
+			Reason:    "cli: ingest",
+			ChangedBy: actor,
+		}); err != nil {
 			return NewSystemError(err, "failed to persist claims")
 		}
 		if _, err := w.EvidenceLinks(ctx, links); err != nil {
@@ -1913,4 +1926,19 @@ func runJob(kind string, scope map[string]string, verbose bool, fn func(context.
 		return fn(ctx, job, w)
 	})
 	return jobErr
+}
+
+// consumerFor picks the contradiction-handling mode for a CLI query.
+//
+// A person reading output wants contradictions surfaced and explained, so the
+// default is ConsumerUser. Asking for inhibition is asking for the opposite —
+// it acts on a decided loser, and only an agent query adjudicates one. Rather
+// than let `--inhibit` be silently inert, requesting it selects the mode that
+// makes it mean something.
+func consumerFor(inhibit bool) domain.Consumer {
+	if inhibit {
+		return domain.ConsumerAgent
+	}
+
+	return domain.ConsumerUser
 }

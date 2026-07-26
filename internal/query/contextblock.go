@@ -67,6 +67,15 @@ func (e Engine) BuildContextBlock(ctx context.Context, opts ContextBlockOptions)
 	// the agent can see which decisions were superseded with reason.
 	active := excludeDeprecated(claims)
 
+	// Honour the Query filter. This field was declared, documented ("empty
+	// Query falls back to all active claims for the run"), accepted by
+	// POST /v1/context and plumbed all the way here — and then never read. A
+	// caller asking for "database migrations" got the entire run's context
+	// block, so MaxTokens truncated the claims they wanted in favour of ones
+	// they did not ask for. No error, a perfectly well-formed block, just the
+	// wrong content.
+	active = filterByQuery(active, opts.Query)
+
 	// Stable trust-then-id ordering. Trust score may not be set on
 	// every backend; fall back to confidence then to ID.
 	sort.SliceStable(active, func(i, j int) bool {
@@ -203,5 +212,49 @@ func excludeDeprecated(claims []domain.Claim) []domain.Claim {
 			out = append(out, c)
 		}
 	}
+	return out
+}
+
+// filterByQuery narrows claims to those sharing a meaningful token with the
+// query. An empty query is the documented "everything for this run" case.
+//
+// Deliberately a filter rather than a re-rank: BuildContextBlock's ordering is
+// trust-first by design (the agent should see what the store is most sure of),
+// and relevance ranking here would quietly compete with that.
+//
+// Matching is EXACT on docTokens — the same tokenizer the retrieval path uses,
+// which lowercases and trims punctuation but does not stem. So "migrations"
+// does not match "migration". That is a real limitation, kept deliberately:
+// a filter that matched more loosely than the engine's own retrieval would be
+// a second, divergent notion of relevance, and two disagreeing definitions is
+// worse than one blunt one. If this needs stemming, the tokenizer is the place
+// to add it, so both paths change together.
+//
+// If nothing matches, the caller gets an empty block rather than an unfiltered
+// one: silently widening a filter back to everything is the behaviour this is
+// fixing.
+func filterByQuery(claims []domain.Claim, q string) []domain.Claim {
+	tokens := docTokens(q)
+	if len(tokens) == 0 {
+		return claims
+	}
+
+	want := make(map[string]struct{}, len(tokens))
+	for _, t := range tokens {
+		want[t] = struct{}{}
+	}
+
+	out := make([]domain.Claim, 0, len(claims))
+
+	for _, c := range claims {
+		for _, t := range docTokens(c.Text) {
+			if _, ok := want[t]; ok {
+				out = append(out, c)
+
+				break
+			}
+		}
+	}
+
 	return out
 }
