@@ -472,47 +472,65 @@ func (r ClaimRepository) ApplyBeliefCredit(ctx context.Context, claimID string, 
 	return nil
 }
 
-// RecomputeTrust applies the supplied scoring function to every
-// claim. Returns the count touched.
-func (r ClaimRepository) RecomputeTrust(ctx context.Context, score func(confidence float64, evidenceCount int, latestEvidence time.Time) float64) (int, error) {
-	// COUNT distinct evidence-event AUTHORS and total events separately, so
-	// corroboration can be graded by independence (echo-chamber guard).
-	rows, err := r.db.QueryContext(ctx, fmt.Sprintf(`
+// trustInput is one claim's scoring inputs: its own confidence, how many
+// DISTINCT evidence-event authors corroborate it, how many evidence events
+// there are in total, and the most recent evidence timestamp.
+type trustInput struct {
+	id              string
+	confidence      float64
+	distinctSources int
+	totalEvents     int
+	latest          time.Time
+}
+
+// trustInputsSQL builds the aggregate that feeds trust scoring. A non-empty
+// where clause bounds it to a subset of claims. COUNT distinct evidence-event
+// AUTHORS and total events separately, so corroboration can be graded by
+// independence (echo-chamber guard). LEFT JOIN so claims with no evidence still
+// appear.
+func (r ClaimRepository) trustInputsSQL(where string) string {
+	return fmt.Sprintf(`
 SELECT c.id, c.confidence,
        COUNT(DISTINCT e.created_by), COUNT(DISTINCT ce.event_id),
        COALESCE(MAX(e.timestamp), 'epoch'::timestamptz)
 FROM %s c
 LEFT JOIN %s ce ON ce.claim_id = c.id
 LEFT JOIN %s e ON e.id = ce.event_id
+%s
 GROUP BY c.id, c.confidence`,
 		qualify(r.ns, "claims"),
 		qualify(r.ns, "claim_evidence"),
 		qualify(r.ns, "events"),
-	))
+		where,
+	)
+}
+
+// listTrustInputs runs the aggregate and collects its rows. The query goes
+// through the same connection as every other read, so the per-request
+// mnemos.tenant GUC and its row-level security policy still apply.
+func (r ClaimRepository) listTrustInputs(ctx context.Context, query string, args ...any) ([]trustInput, error) {
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return 0, fmt.Errorf("list trust inputs: %w", err)
+		return nil, err
 	}
-	type input struct {
-		id              string
-		confidence      float64
-		distinctSources int
-		totalEvents     int
-		latest          time.Time
-	}
-	var inputs []input
+	defer func() { _ = rows.Close() }()
+	var inputs []trustInput
 	for rows.Next() {
-		var in input
+		var in trustInput
 		if err := rows.Scan(&in.id, &in.confidence, &in.distinctSources, &in.totalEvents, &in.latest); err != nil {
-			_ = rows.Close()
-			return 0, fmt.Errorf("scan trust input: %w", err)
+			return nil, fmt.Errorf("scan trust input: %w", err)
 		}
 		inputs = append(inputs, in)
 	}
-	_ = rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("iterate trust inputs: %w", err)
+		return nil, fmt.Errorf("iterate trust inputs: %w", err)
 	}
+	return inputs, nil
+}
 
+// applyTrustInputs scores each row and writes trust_score back in one
+// transaction. Returns the number of claims touched.
+func (r ClaimRepository) applyTrustInputs(ctx context.Context, inputs []trustInput, score func(confidence float64, evidenceCount int, latestEvidence time.Time) float64) (int, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin trust tx: %w", err)
@@ -530,6 +548,35 @@ GROUP BY c.id, c.confidence`,
 		return 0, fmt.Errorf("commit trust update: %w", err)
 	}
 	return len(inputs), nil
+}
+
+// RecomputeTrust applies the supplied scoring function to every
+// claim. Returns the count touched.
+func (r ClaimRepository) RecomputeTrust(ctx context.Context, score func(confidence float64, evidenceCount int, latestEvidence time.Time) float64) (int, error) {
+	inputs, err := r.listTrustInputs(ctx, r.trustInputsSQL(""))
+	if err != nil {
+		return 0, fmt.Errorf("list trust inputs: %w", err)
+	}
+	return r.applyTrustInputs(ctx, inputs, score)
+}
+
+// RecomputeTrustForClaims implements [ports.ScopedTrustScorer]: the same
+// recomputation bounded to claimIDs, so a write's cost tracks what it touched
+// rather than the size of the store. Ids with no matching claim are skipped, so
+// the returned count is the number of claims actually rescored.
+//
+// The id set arrives as a single text[] parameter (= ANY($1), the package's
+// existing IN-list idiom), so no chunking is needed however many ids a write
+// touched — there is one bind parameter regardless of slice length.
+func (r ClaimRepository) RecomputeTrustForClaims(ctx context.Context, claimIDs []string, score func(confidence float64, evidenceCount int, latestEvidence time.Time) float64) (int, error) {
+	if len(claimIDs) == 0 {
+		return 0, nil
+	}
+	inputs, err := r.listTrustInputs(ctx, r.trustInputsSQL("WHERE c.id = ANY($1)"), pgArray(claimIDs))
+	if err != nil {
+		return 0, fmt.Errorf("list trust inputs for claims: %w", err)
+	}
+	return r.applyTrustInputs(ctx, inputs, score)
 }
 
 // AverageTrust satisfies the corresponding ports method.
