@@ -2259,7 +2259,8 @@ func makeSearchHandler(conn *store.Conn) http.HandlerFunc {
 			req.TopK = 10
 		}
 
-		opts := query.AnswerOptions{MinTrust: req.MinTrust}
+		// Same defaults as MCP and the CLI: a hosted brain is still a brain.
+		opts := query.AnswerOptions{MinTrust: req.MinTrust}.WithCognitiveDefaults()
 		if req.AsOf != "" {
 			t, err := parseTimeFlexible(req.AsOf)
 			if err != nil {

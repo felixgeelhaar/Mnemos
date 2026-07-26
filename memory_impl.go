@@ -537,13 +537,16 @@ func (m *memory) recall(ctx context.Context, q Query) ([]Result, domain.Answer, 
 		return nil, domain.Answer{}, errors.New("mnemos: Recall: Text is required")
 	}
 
+	// The embedded store is the path every consuming product uses (senat-os,
+	// pet-medical). It built AnswerOptions without the cognitive behaviours, so
+	// those brains never primed, never strengthened, never reconsolidated.
 	opts := query.AnswerOptions{
 		Hops:           q.Hops,
 		AsOf:           q.AsOf,
 		RecordedAsOf:   q.RecordedAsOf,
 		IncludeHistory: q.IncludeHistory,
 		Lifecycle:      domain.ClaimLifecycle(q.Lifecycle),
-	}
+	}.WithCognitiveDefaults()
 
 	var ans domain.Answer
 	var err error

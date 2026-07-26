@@ -1223,7 +1223,10 @@ func mcpRunQuery(ctx context.Context, input mcpQueryInput) (mcpQueryOutput, erro
 	if hops > 5 {
 		hops = 5
 	}
-	opts := query.AnswerOptions{Hops: hops}
+	// Cognitive retrieval is ON here, not just in the CLI. Before this, MCP
+	// built AnswerOptions without the five behaviours, so every recall through
+	// Claude Code got none of them and no env var could change it.
+	opts := query.AnswerOptions{Hops: hops}.WithCognitiveDefaults()
 
 	var answer domain.Answer
 	if strings.TrimSpace(input.RunID) != "" {
