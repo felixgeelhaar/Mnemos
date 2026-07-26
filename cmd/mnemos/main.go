@@ -564,12 +564,15 @@ func handleQuery(args []string, f Flags) {
 			RecordedAsOf:   qa.recordedAsOf,
 			IncludeHistory: includeHistory,
 			Visibility:     qa.visibility,
-			Prime:          qa.prime || spreadingActivationEnv(),
-			Salient:        qa.salient || salienceEnv(),
-			Hebbian:        qa.hebbian || hebbianEnv(),
-			Reconsolidate:  qa.reconsolidate || reconsolidateEnv(),
-			Inhibit:        qa.inhibit || inhibitEnv(),
-		}
+			// Per-query flags force a behaviour ON; the shared defaults supply
+			// the rest. Five near-identical env helpers used to live here and
+			// nowhere else, which is exactly why no other surface had them.
+			Prime:         qa.prime,
+			Salient:       qa.salient,
+			Hebbian:       qa.hebbian,
+			Reconsolidate: qa.reconsolidate,
+			Inhibit:       qa.inhibit,
+		}.WithCognitiveDefaults()
 		if entity != "" {
 			entRepo := conn.Entities
 			ent, ok, rErr := resolveEntity(ctx, entRepo, entity)
@@ -1770,67 +1773,6 @@ done:
 	}
 
 	return out, nil
-}
-
-// spreadingActivationEnv reports whether spreading-activation priming (ADR 0013
-// §2) is enabled via the MNEMOS_SPREADING_ACTIVATION env var. Truthy values
-// ("1"/"true"/"yes") turn priming on globally without the per-query --prime
-// flag; anything else (including unset) leaves it off.
-func spreadingActivationEnv() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("MNEMOS_SPREADING_ACTIVATION"))) {
-	case "1", "true", "yes":
-		return true
-	default:
-		return false
-	}
-}
-
-// salienceEnv reports whether salience-biased retrieval (ADR 0013 §4) is enabled
-// via the MNEMOS_SALIENCE env var. Truthy values ("1"/"true"/"yes") turn the
-// stakes bias on globally without the per-query --salient flag.
-func salienceEnv() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("MNEMOS_SALIENCE"))) {
-	case "1", "true", "yes":
-		return true
-	default:
-		return false
-	}
-}
-
-// hebbianEnv reports whether the Hebbian co-activation write-back (ADR 0015 §4) is
-// enabled via the MNEMOS_HEBBIAN env var. Truthy values ("1"/"true"/"yes") turn it on
-// globally without the per-query --hebbian flag.
-func hebbianEnv() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("MNEMOS_HEBBIAN"))) {
-	case "1", "true", "yes":
-		return true
-	default:
-		return false
-	}
-}
-
-// reconsolidateEnv reports whether the retrieval freshness touch (ADR 0015 §5) is
-// enabled via the MNEMOS_RECONSOLIDATE env var. Truthy values ("1"/"true"/"yes") turn
-// it on globally without the per-query --reconsolidate flag.
-func reconsolidateEnv() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("MNEMOS_RECONSOLIDATE"))) {
-	case "1", "true", "yes":
-		return true
-	default:
-		return false
-	}
-}
-
-// inhibitEnv reports whether competitive inhibition (ADR 0016) is enabled via the
-// MNEMOS_INHIBIT env var. Truthy values ("1"/"true"/"yes") turn it on globally without
-// the per-query --inhibit flag.
-func inhibitEnv() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("MNEMOS_INHIBIT"))) {
-	case "1", "true", "yes":
-		return true
-	default:
-		return false
-	}
 }
 
 // formatEvolution renders a one-line summary of a claim's temporal

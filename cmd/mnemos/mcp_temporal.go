@@ -196,7 +196,7 @@ func mcpRunRecallAtTime(ctx context.Context, input mcpRecallAtTimeInput) (mcpQue
 	opts := query.AnswerOptions{
 		Hops: hops,
 		AsOf: asOf.UTC(),
-	}
+	}.WithCognitiveDefaults()
 
 	var answer domain.Answer
 	if runID := strings.TrimSpace(input.RunID); runID != "" {
