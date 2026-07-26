@@ -2,6 +2,24 @@ package workflow
 
 import "go.klarlabs.de/statekit"
 
+// DeclaredStatuses lists every state the workflow machine knows.
+//
+// It exists so callers can be checked against the machine BEFORE they run.
+// Job.SetStatus takes a bare string and validates at runtime, so an undeclared
+// status compiles fine and fails only when a user invokes the command — which
+// is exactly how `mnemos quality` shipped setting "computing", a state that has
+// never existed, and failed on its first action for every user.
+//
+// This list is kept honest by TestDeclaredStatusesMatchTheMachine, which parses
+// the State(...) literals below and fails if the two disagree. Add a state here
+// only together with its transitions.
+func DeclaredStatuses() []string {
+	return []string{
+		"pending", "running", "loading", "extracting", "relating",
+		"saving", "querying", "embedding", "retrying", "completed", "failed",
+	}
+}
+
 // newStatusMachine returns the workflow state machine used to validate job
 // status transitions.
 func newStatusMachine() (*statekit.Interpreter[struct{}], error) {
