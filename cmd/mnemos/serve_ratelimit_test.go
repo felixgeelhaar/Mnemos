@@ -90,15 +90,15 @@ func TestClientIP_TrustsForwardedForWhenOptedIn(t *testing.T) {
 func TestClientIP_ResolutionSource(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "192.0.2.10:1234"
-	req.Header.Set("X-Forwarded-For", "1.2.3.4, 5.6.7.8")
+	req.Header.Set("X-Forwarded-For", "198.51.100.4, 198.51.100.8")
 
 	withTrustProxy(t, false)
 	if got := clientIP(req); got != "192.0.2.10" {
 		t.Errorf("default clientIP = %q, want the socket peer 192.0.2.10", got)
 	}
 	withTrustProxy(t, true)
-	if got := clientIP(req); got != "1.2.3.4" {
-		t.Errorf("trusted-proxy clientIP = %q, want the leftmost forwarded entry 1.2.3.4", got)
+	if got := clientIP(req); got != "198.51.100.4" {
+		t.Errorf("trusted-proxy clientIP = %q, want the leftmost forwarded entry 198.51.100.4", got)
 	}
 }
 
