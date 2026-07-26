@@ -24,14 +24,17 @@ That last one is the regulator-grade question: reproduce the agent's view at the
 === "HTTP"
 
     ```bash
+    # Reads need a bearer token too — see the API reference.
+    AUTH="Authorization: Bearer $MNEMOS_JWT"
+
     # Validity-time
-    curl 'http://localhost:7777/v1/claims?as_of=2026-04-15T00:00:00Z'
+    curl -H "$AUTH" 'http://localhost:7777/v1/beliefs?as_of=2026-04-15T00:00:00Z'
 
     # Ingestion-time
-    curl 'http://localhost:7777/v1/claims?recorded_as_of=2026-04-15T00:00:00Z'
+    curl -H "$AUTH" 'http://localhost:7777/v1/beliefs?recorded_as_of=2026-04-15T00:00:00Z'
 
     # Both
-    curl 'http://localhost:7777/v1/claims?as_of=2026-04-15T00:00:00Z&recorded_as_of=2026-04-15T00:00:00Z'
+    curl -H "$AUTH" 'http://localhost:7777/v1/beliefs?as_of=2026-04-15T00:00:00Z&recorded_as_of=2026-04-15T00:00:00Z'
     ```
 
 === "CLI"
