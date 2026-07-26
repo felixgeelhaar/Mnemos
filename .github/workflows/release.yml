@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  # Re-drive a release without re-tagging. v0.117.1 needed exactly this:
+  # the GitHub Release published, then the brew cask push failed because
+  # the tap credential and the tap had different resource owners -- and
+  # with no manual trigger the only ways forward were deleting and
+  # re-pushing the tag, or editing the tap by hand.
+  workflow_dispatch:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
