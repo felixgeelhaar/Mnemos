@@ -72,8 +72,29 @@ ALTER TABLE claims ADD COLUMN IF NOT EXISTS subject_class text NOT NULL DEFAULT 
 -- treated as durable: the whole back catalogue predates the column, so absence
 -- of a verdict must never demote a belief.
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS durability text NOT NULL DEFAULT '';
+-- Test provenance (Claim.Type == 'test_result'). ListByTestRequirementRef has
+-- always queried test_requirement_ref / test_last_run_at here, but the columns
+-- were never declared, so the call failed outright with 42703 (undefined
+-- column) — not "no results", an error — and any test_result claim read back
+-- without test_id failed domain validation.
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_id               text        NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_requirement_ref  text        NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_author           text        NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_last_modified    timestamptz;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_last_run_at      timestamptz;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_pass_count       integer     NOT NULL DEFAULT 0;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_fail_count       integer     NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_claims_scope_service ON claims(scope_service);
 CREATE INDEX IF NOT EXISTS idx_claims_lifecycle ON claims(lifecycle);
+-- ListByTestRequirementRef filters `type = 'test_result' AND
+-- test_requirement_ref = $1`; without an index that is a seq scan of every
+-- claim on a store that only grows. Deliberately NOT partial on
+-- test_requirement_ref <> '': the planner only uses a partial index when the
+-- query's quals imply its predicate, which a bound parameter does not do under
+-- a generic plan — the index would then be silently skipped exactly when it
+-- matters. Same shape as the sqlite and mysql indexes.
+CREATE INDEX IF NOT EXISTS idx_claims_test_requirement_ref
+  ON claims(test_requirement_ref, type);
 
 CREATE INDEX IF NOT EXISTS idx_claims_trust_score ON claims(trust_score);
 CREATE INDEX IF NOT EXISTS idx_claims_valid_to    ON claims(valid_to);

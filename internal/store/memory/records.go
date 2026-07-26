@@ -154,6 +154,12 @@ func copyFloatMap(in map[string]float64) map[string]float64 {
 	return out
 }
 
+// storedClaim mirrors the claims row. EVERY domain.Claim field must have a
+// slot here: a field this struct omits is silently dropped on write and reads
+// back as the zero value, which is not "missing data" but WRONG data — an
+// omitted Visibility read back as "" is coerced to team downstream, so a
+// personal belief leaks into team answers. TestStoredClaim_RoundTripsEveryField
+// reflects over domain.Claim and fails when a new field is added without a slot.
 type storedClaim struct {
 	ID                   string
 	Text                 string
@@ -173,6 +179,28 @@ type storedClaim struct {
 	Lifecycle            domain.ClaimLifecycle
 	SubjectClass         domain.SubjectClass
 	Durability           domain.Durability
+
+	// Epistemic provenance.
+	SourceDocument      string
+	SourceType          domain.SourceType
+	SourceAuthority     float64
+	Liveness            domain.LivenessStatus
+	LastExecuted        time.Time
+	CitationCount       int
+	ProvenanceRationale string
+
+	// Test provenance (Type == test_result).
+	TestID             string
+	TestRequirementRef string
+	TestAuthor         string
+	TestLastModified   time.Time
+	TestLastRunAt      time.Time
+	TestPassCount      int
+	TestFailCount      int
+
+	// Visibility is normalised on write (see visibilityOrDefault), matching
+	// the SQLite column default, so reads never hand back an empty audience.
+	Visibility domain.Visibility
 }
 
 func (c storedClaim) toDomain() domain.Claim {
@@ -202,6 +230,36 @@ func (c storedClaim) toDomain() domain.Claim {
 		Lifecycle:            c.Lifecycle,
 		SubjectClass:         c.SubjectClass,
 		Durability:           c.Durability,
+
+		SourceDocument:      c.SourceDocument,
+		SourceType:          c.SourceType,
+		SourceAuthority:     c.SourceAuthority,
+		Liveness:            c.Liveness,
+		LastExecuted:        c.LastExecuted,
+		CitationCount:       c.CitationCount,
+		ProvenanceRationale: c.ProvenanceRationale,
+
+		TestID:             c.TestID,
+		TestRequirementRef: c.TestRequirementRef,
+		TestAuthor:         c.TestAuthor,
+		TestLastModified:   c.TestLastModified,
+		TestLastRunAt:      c.TestLastRunAt,
+		TestPassCount:      c.TestPassCount,
+		TestFailCount:      c.TestFailCount,
+
+		Visibility: c.Visibility,
+	}
+}
+
+// visibilityOrDefault normalises a Visibility the way the SQLite backend's
+// column default does: empty and unrecognised values become
+// domain.DefaultVisibility ("team") so a read never returns an empty audience.
+func visibilityOrDefault(v domain.Visibility) domain.Visibility {
+	switch v {
+	case domain.VisibilityPersonal, domain.VisibilityTeam, domain.VisibilityOrg:
+		return v
+	default:
+		return domain.DefaultVisibility
 	}
 }
 
@@ -241,6 +299,24 @@ func storedClaimFromDomain(c domain.Claim) storedClaim {
 		Lifecycle:            c.Lifecycle,
 		SubjectClass:         c.SubjectClass,
 		Durability:           c.Durability,
+
+		SourceDocument:      c.SourceDocument,
+		SourceType:          c.SourceType,
+		SourceAuthority:     c.SourceAuthority,
+		Liveness:            c.Liveness,
+		LastExecuted:        c.LastExecuted.UTC(),
+		CitationCount:       c.CitationCount,
+		ProvenanceRationale: c.ProvenanceRationale,
+
+		TestID:             c.TestID,
+		TestRequirementRef: c.TestRequirementRef,
+		TestAuthor:         c.TestAuthor,
+		TestLastModified:   c.TestLastModified.UTC(),
+		TestLastRunAt:      c.TestLastRunAt.UTC(),
+		TestPassCount:      c.TestPassCount,
+		TestFailCount:      c.TestFailCount,
+
+		Visibility: visibilityOrDefault(c.Visibility),
 	}
 }
 

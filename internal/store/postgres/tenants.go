@@ -110,7 +110,7 @@ func enumerateTenants(ctx context.Context, baseDSN string) ([]store.TenantScope,
 // and the ORDER BY are added.
 func readTenantClaims(ctx context.Context, db *sql.DB, ns, tenant string) ([]domain.Claim, error) {
 	rows, err := db.QueryContext(ctx, fmt.Sprintf(`
-SELECT id, text, type, confidence, status, created_at, created_by, trust_score, valid_from, valid_to, lifecycle, subject_class, confidence_components
+SELECT `+claimColumns("")+`
 FROM %s WHERE tenant = $1 ORDER BY created_at ASC`, qualify(ns, "claims")), tenant)
 	if err != nil {
 		return nil, err
@@ -142,14 +142,11 @@ FROM %s WHERE tenant = $1 ORDER BY confidence DESC, derived_at DESC`, qualify(ns
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// Hydrate evidence per lesson. lesson_evidence rows are keyed by the unique
-	// lesson id, so this stays within the tenant even under a bypassing role.
-	for i := range out {
-		ev, err := repo.ListEvidence(ctx, out[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		out[i].Evidence = ev
+	// Hydrate evidence for the whole batch in one query per chunk (not one per
+	// lesson). lesson_evidence rows are keyed by the unique lesson id, so this
+	// stays within the tenant even under a bypassing role.
+	if err := repo.hydrateEvidence(ctx, out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
