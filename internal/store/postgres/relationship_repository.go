@@ -63,11 +63,11 @@ FROM %s WHERE from_claim_id = $1 OR to_claim_id = $1`, qualify(r.ns, "relationsh
 	return collectRelationshipRows(rows)
 }
 
-// RepointEndpoint rewrites every relationship whose endpoints
-// equal oldID to point at newID. Duplicates (existing edges with
-// the same type+from+to) drop via the unique-edge index, surfaced
-// by removing every leftover row pointing at oldID after the
-// rewrite. Self-loops (newID-newID) are also dropped.
+// RepointEndpoint rewrites every relationship whose endpoints equal oldID to
+// point at newID. Edges that would become duplicates of an existing
+// (type, from, to) collapse into one, and edges that would become self-loops
+// (newID-newID) are dropped. Mnemos does not distinguish duplicate edges, so
+// collapsing is lossless.
 func (r RelationshipRepository) RepointEndpoint(ctx context.Context, oldID, newID string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -75,35 +75,49 @@ func (r RelationshipRepository) RepointEndpoint(ctx context.Context, oldID, newI
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Postgres has no UPDATE OR IGNORE; use a delete-then-update
-	// dance: pre-emptively drop rows that would conflict on the
-	// unique index after rewriting, then update what's left.
-	conflictFrom := fmt.Sprintf(`
+	// Postgres has no UPDATE OR IGNORE, so conflicting edges must be removed
+	// before the rewrite. This used to be two pre-deletes, one per endpoint,
+	// BOTH evaluated before EITHER update ran — and that is unsound: rewriting
+	// from_claim_id changes which rows the to_claim_id rewrite collides with.
+	//
+	// Concretely, with an existing (T, new, new) edge, a row (T, old, old)
+	// survives both pre-deletes (at the time they run, its from_claim_id is
+	// still `old`, so it matches no conflict), becomes (T, new, old) after the
+	// first UPDATE, and then collides on the second. The UPDATE raised
+	// 23505 on idx_relationships_unique_edge and took the whole transaction —
+	// and with it the entire consolidation pass — down with it. Observed in
+	// production: memory-consolidate failed on every run, merging nothing, for
+	// as long as a single such pair existed.
+	//
+	// Compute the collision set on the POST-rewrite identity instead, in one
+	// statement, which makes it independent of the order the updates run in:
+	// project each candidate row onto the (type, from', to') it WILL have, keep
+	// the first row per identity, and drop the rest — plus anything that
+	// becomes a self-loop. After this the updates cannot violate the index.
+	//
+	// Candidates must include rows touching newID, not just oldID: the edge a
+	// rewritten row collides WITH is by definition already on newID.
+	prune := fmt.Sprintf(`
 DELETE FROM %s WHERE id IN (
-  SELECT a.id FROM %s a
-  WHERE a.from_claim_id = $1
-    AND EXISTS (SELECT 1 FROM %s b
-                WHERE b.type = a.type
-                  AND b.from_claim_id = $2
-                  AND b.to_claim_id = a.to_claim_id))`,
-		qualify(r.ns, "relationships"),
+  SELECT id FROM (
+    SELECT id,
+           CASE WHEN from_claim_id = $1 THEN $2 ELSE from_claim_id END AS nf,
+           CASE WHEN to_claim_id   = $1 THEN $2 ELSE to_claim_id   END AS nt,
+           ROW_NUMBER() OVER (
+             PARTITION BY type,
+                          CASE WHEN from_claim_id = $1 THEN $2 ELSE from_claim_id END,
+                          CASE WHEN to_claim_id   = $1 THEN $2 ELSE to_claim_id   END
+             ORDER BY id
+           ) AS rn
+      FROM %s
+     WHERE from_claim_id IN ($1, $2) OR to_claim_id IN ($1, $2)
+  ) s
+  WHERE s.rn > 1 OR s.nf = s.nt
+)`,
 		qualify(r.ns, "relationships"),
 		qualify(r.ns, "relationships"))
-	conflictTo := fmt.Sprintf(`
-DELETE FROM %s WHERE id IN (
-  SELECT a.id FROM %s a
-  WHERE a.to_claim_id = $1
-    AND EXISTS (SELECT 1 FROM %s b
-                WHERE b.type = a.type
-                  AND b.from_claim_id = a.from_claim_id
-                  AND b.to_claim_id = $2))`,
-		qualify(r.ns, "relationships"),
-		qualify(r.ns, "relationships"),
-		qualify(r.ns, "relationships"))
-	for _, stmt := range []string{conflictFrom, conflictTo} {
-		if _, err := tx.ExecContext(ctx, stmt, oldID, newID); err != nil {
-			return fmt.Errorf("clear conflicting edges: %w", err)
-		}
+	if _, err := tx.ExecContext(ctx, prune, oldID, newID); err != nil {
+		return fmt.Errorf("prune colliding edges %s -> %s: %w", oldID, newID, err)
 	}
 	if _, err := tx.ExecContext(ctx,
 		fmt.Sprintf(`UPDATE %s SET from_claim_id = $1 WHERE from_claim_id = $2`, qualify(r.ns, "relationships")),
@@ -117,12 +131,9 @@ DELETE FROM %s WHERE id IN (
 	); err != nil {
 		return fmt.Errorf("repoint to %s -> %s: %w", oldID, newID, err)
 	}
-	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`DELETE FROM %s WHERE from_claim_id = $1 AND to_claim_id = $1`, qualify(r.ns, "relationships")),
-		newID,
-	); err != nil {
-		return fmt.Errorf("drop self-loops on %s: %w", newID, err)
-	}
+	// No separate self-loop sweep: the prune above already drops any row whose
+	// post-rewrite endpoints are equal (nf = nt), which covers both loops the
+	// rewrite would create and any that already existed on newID.
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit repoint endpoint tx: %w", err)
 	}
