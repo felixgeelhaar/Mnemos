@@ -14,6 +14,7 @@ import (
 	"go.klarlabs.de/mnemos/internal/govwrite"
 	"go.klarlabs.de/mnemos/internal/pipeline"
 	"go.klarlabs.de/mnemos/internal/ports"
+	"go.klarlabs.de/mnemos/internal/store"
 	"go.klarlabs.de/mnemos/internal/trust"
 	"go.klarlabs.de/mnemos/internal/workflow"
 )
@@ -247,6 +248,83 @@ func handleRecomputeTrust(args []string, f Flags) {
 	exitWithMnemosError(f.Verbose, err)
 }
 
+// defaultEmbedBatch caps how many texts go into one provider request.
+//
+// reembed used to send the ENTIRE corpus as a single call. That survives
+// against OpenAI, which accepts very large batches, and falls over against a
+// self-hosted TEI/Infinity sidecar, whose max-batch and max-token budgets are
+// far smaller — which is precisely the provider you switch to when you move off
+// a US API, i.e. exactly when you need this command to work. Override with
+// MNEMOS_EMBED_BATCH.
+const defaultEmbedBatch = 64
+
+func embedBatchSize() int {
+	if v := os.Getenv("MNEMOS_EMBED_BATCH"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+
+	return defaultEmbedBatch
+}
+
+// reembedTarget is one entity type's worth of work.
+type reembedTarget struct {
+	entityType string // "claim" | "event" — the embeddings.entity_type value
+	label      string // for user-facing output
+	ids        []string
+	text       map[string]string
+}
+
+// reembedEntities embeds one target in bounded batches and stores each vector
+// under its entity type. Returns how many were stored.
+//
+// It requires one vector per input, per batch. The previous implementation did
+// `if i >= len(vectors) { break }` and then reported len(vectors) as the
+// success count — so a provider returning a short batch left rows unembedded
+// while the command printed a success line and exited 0. internal/pipeline
+// guards against exactly this ("silently storing a short prefix and returning
+// its length as a success count"); reembed simply never got the guard. With
+// batching added it matters more, not less: a partially-honoured batch is the
+// most likely way a self-hosted sidecar degrades under load.
+func reembedEntities(ctx context.Context, w *govwrite.Writer, client embedding.Client, model string, t reembedTarget, batch int) (int, error) {
+	texts := make([]string, 0, len(t.ids))
+	keep := make([]string, 0, len(t.ids))
+
+	for _, id := range t.ids {
+		txt, ok := t.text[id]
+		if !ok || strings.TrimSpace(txt) == "" {
+			continue // deleted between listing and now, or nothing to embed
+		}
+		texts = append(texts, txt)
+		keep = append(keep, id)
+	}
+
+	stored := 0
+	for start := 0; start < len(texts); start += batch {
+		end := min(start+batch, len(texts))
+
+		vectors, err := client.Embed(ctx, texts[start:end])
+		if err != nil {
+			return stored, NewSystemError(err, "embed %ss (batch %d-%d of %d)", t.entityType, start, end, len(texts))
+		}
+		if len(vectors) != end-start {
+			return stored, NewSystemError(
+				fmt.Errorf("provider returned %d vectors for %d inputs", len(vectors), end-start),
+				"embed %ss (batch %d-%d): short batch, refusing to store a partial result", t.entityType, start, end)
+		}
+
+		for i, vec := range vectors {
+			if err := w.Embedding(ctx, keep[start+i], t.entityType, vec, model, ""); err != nil {
+				return stored, NewSystemError(err, "store embedding for %s %s", t.entityType, keep[start+i])
+			}
+			stored++
+		}
+	}
+
+	return stored, nil
+}
+
 func handleReembed(args []string, f Flags) {
 	for _, a := range args {
 		switch a {
@@ -258,40 +336,28 @@ func handleReembed(args []string, f Flags) {
 
 	err := runJob("reembed", map[string]string{"force": fmt.Sprintf("%t", f.Force), "dry_run": fmt.Sprintf("%t", f.DryRun)}, f.Verbose, func(ctx context.Context, _ *workflow.Job, w *govwrite.Writer) error {
 		conn := w.Conn()
-		// Determine which claim ids need (re-)embedding through
-		// ports — Claims.ListAll for --force, the dedicated
-		// ListIDsMissingEmbedding anti-join otherwise.
-		var ids []string
-		allClaims, err := conn.Claims.ListAll(ctx)
+
+		targets, err := collectReembedTargets(ctx, conn, f.Force)
 		if err != nil {
-			return NewSystemError(err, "list claims")
-		}
-		if f.Force {
-			ids = make([]string, 0, len(allClaims))
-			for _, c := range allClaims {
-				ids = append(ids, c.ID)
-			}
-		} else {
-			missing, err := conn.Claims.ListIDsMissingEmbedding(ctx)
-			if err != nil {
-				return NewSystemError(err, "list missing embeddings")
-			}
-			ids = missing
+			return err
 		}
 
-		if len(ids) == 0 {
-			fmt.Println("No claims need embeddings. Nothing to do.")
+		total := 0
+		for _, t := range targets {
+			total += len(t.ids)
+		}
+		if total == 0 {
+			fmt.Println("Nothing needs embeddings. Nothing to do.")
 			return nil
 		}
 
 		if f.DryRun {
-			fmt.Printf("Would (re)embed %d claim(s). Run without --dry-run to apply.\n", len(ids))
-			return nil
-		}
+			for _, t := range targets {
+				fmt.Printf("Would (re)embed %d %s(s).\n", len(t.ids), t.label)
+			}
+			fmt.Println("Run without --dry-run to apply.")
 
-		text := make(map[string]string, len(allClaims))
-		for _, c := range allClaims {
-			text[c.ID] = c.Text
+			return nil
 		}
 
 		cfg, err := embedding.ConfigFromEnv()
@@ -303,35 +369,86 @@ func handleReembed(args []string, f Flags) {
 			return NewSystemError(err, "embedding client")
 		}
 
-		texts := make([]string, 0, len(ids))
-		keep := make([]string, 0, len(ids))
-		for _, id := range ids {
-			t, ok := text[id]
-			if !ok {
-				continue
+		batch := embedBatchSize()
+		for _, t := range targets {
+			n, err := reembedEntities(ctx, w, client, cfg.Model, t, batch)
+			if err != nil {
+				// Report progress before bailing: the run is resumable, and
+				// knowing how far it got is the difference between "re-run it"
+				// and "work out what state the corpus is in".
+				fmt.Printf("Embedded %d %s(s) before failing.\n", n, t.label)
+				return err
 			}
-			texts = append(texts, t)
-			keep = append(keep, id)
+			fmt.Printf("Embedded %d %s(s) with %s/%s.\n", n, t.label, cfg.Provider, cfg.Model)
 		}
 
-		vectors, err := client.Embed(ctx, texts)
-		if err != nil {
-			return NewSystemError(err, "embed claims")
-		}
-
-		for i, id := range keep {
-			if i >= len(vectors) {
-				break
-			}
-			if err := w.Embedding(ctx, id, "claim", vectors[i], cfg.Model, ""); err != nil {
-				return NewSystemError(err, "store embedding for %s", id)
-			}
-		}
-
-		fmt.Printf("Embedded %d claim(s) with %s/%s.\n", len(vectors), cfg.Provider, cfg.Model)
 		return nil
 	})
 	exitWithMnemosError(f.Verbose, err)
+}
+
+// collectReembedTargets works out what needs embedding, for BOTH claims and
+// events.
+//
+// Events were previously ignored entirely — reembed hardcoded entity type
+// "claim", and event vectors are written only by the ingest pipeline. Changing
+// the embedding model therefore stranded every event embedding in the old
+// space with no way to migrate it: recall is model-filtered, so those rows went
+// silently dark and stayed dark short of re-ingesting the corpus.
+func collectReembedTargets(ctx context.Context, conn *store.Conn, force bool) ([]reembedTarget, error) {
+	claims, err := conn.Claims.ListAll(ctx)
+	if err != nil {
+		return nil, NewSystemError(err, "list claims")
+	}
+	claimText := make(map[string]string, len(claims))
+	for _, c := range claims {
+		claimText[c.ID] = c.Text
+	}
+
+	events, err := conn.Events.ListAll(ctx)
+	if err != nil {
+		return nil, NewSystemError(err, "list events")
+	}
+	eventText := make(map[string]string, len(events))
+	for _, e := range events {
+		eventText[e.ID] = e.Content
+	}
+
+	var claimIDs, eventIDs []string
+	if force {
+		claimIDs = make([]string, 0, len(claims))
+		for _, c := range claims {
+			claimIDs = append(claimIDs, c.ID)
+		}
+		eventIDs = make([]string, 0, len(events))
+		for _, e := range events {
+			eventIDs = append(eventIDs, e.ID)
+		}
+	} else {
+		if claimIDs, err = conn.Claims.ListIDsMissingEmbedding(ctx); err != nil {
+			return nil, NewSystemError(err, "list missing claim embeddings")
+		}
+		// No anti-join port method exists for events, so diff in Go against the
+		// stored event embeddings rather than add a method to every backend.
+		existing, err := conn.Embeddings.ListByEntityType(ctx, "event")
+		if err != nil {
+			return nil, NewSystemError(err, "list event embeddings")
+		}
+		embedded := make(map[string]struct{}, len(existing))
+		for _, rec := range existing {
+			embedded[rec.EntityID] = struct{}{}
+		}
+		for _, e := range events {
+			if _, ok := embedded[e.ID]; !ok {
+				eventIDs = append(eventIDs, e.ID)
+			}
+		}
+	}
+
+	return []reembedTarget{
+		{entityType: "claim", label: "claim", ids: claimIDs, text: claimText},
+		{entityType: "event", label: "event", ids: eventIDs, text: eventText},
+	}, nil
 }
 
 func printResetSummary(c resetCounts, keepEvents bool) {
