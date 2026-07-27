@@ -247,22 +247,38 @@ func (e Engine) AnswerWithOptions(ctx context.Context, question string, opts Ans
 	if err != nil {
 		return domain.Answer{}, err
 	}
+	e.applyRetrievalWriteBacks(ctx, opts, ans)
+	return ans, nil
+}
+
+// applyRetrievalWriteBacks runs the three cognitive write-backs on the answer a
+// caller is actually about to receive. EVERY exported entry point that produces a
+// domain.Answer must end here — TestAnswerEntryPointsApplyRetrievalWriteBacks
+// fails the build if a new one doesn't.
+//
+// It exists because AnswerForRunWithOptions used to call answerWithEvents
+// directly. opts.Hebbian / Reconsolidate / Inhibit — which WithCognitiveDefaults
+// sets true on every production path — were therefore read nowhere on run-scoped
+// recall: it never strengthened, never reconsolidated, never inhibited. Same
+// "option set but never read" class the cognitive defaults were introduced to
+// kill, one entry point further down.
+//
+// All three are opt-in, bounded, single-shot and best-effort: placed HERE, on the
+// finally-chosen answer, rather than inside answerWithEvents (which can run twice
+// under corrective retrieval) so each fires exactly once on what was returned.
+func (e Engine) applyRetrievalWriteBacks(ctx context.Context, opts AnswerOptions, ans domain.Answer) {
 	// Hebbian co-activation (ADR 0015 §4): the beliefs returned together this query
 	// "fired together", so strengthen the existing association edges among them.
-	// Opt-in and single-shot — placed HERE, on the finally-chosen answer, rather than
-	// inside answerWithEvents (which can run twice under corrective retrieval) so it
-	// fires once on what was actually returned. Best-effort: never fails a read.
+	// Best-effort: never fails a read.
 	e.strengthenCoactivation(ctx, opts, ans)
 	// Reconsolidation (ADR 0015 §5): retrieval is a write opportunity — recalling a
 	// belief refreshes its liveness (the testing effect: retrieval practice keeps a
-	// memory alive). Same single-shot, opt-in, best-effort seam as the Hebbian
-	// write-back above.
+	// memory alive).
 	e.reconsolidateRecalled(ctx, opts, ans)
 	// Competitive inhibition (ADR 0016): recalling a decisive contradiction winner
-	// suppresses the retrievability of the rival it beat. Same opt-in, single-shot,
-	// best-effort seam; retrievability only, never trust.
+	// suppresses the retrievability of the rival it beat. Retrievability only,
+	// never trust.
 	e.inhibitLosers(ctx, opts, ans)
-	return ans, nil
 }
 
 // resolveAnswer runs the recall pass and the corrective-retrieval fallback, returning
@@ -373,15 +389,30 @@ func (e Engine) inhibitLosers(ctx context.Context, opts AnswerOptions, ans domai
 	if !ok {
 		return
 	}
+	// Collect every decisive loser first and fetch them in ONE round trip: the
+	// per-verdict ListByIDs(ctx, []string{id}) this replaces called a batch API
+	// with a one-element slice inside a loop, so a query resolving k
+	// contradictions paid k serialised queries.
+	loserIDs := make([]string, 0, len(ans.Verdicts))
+	seen := make(map[string]struct{}, len(ans.Verdicts))
 	for _, v := range ans.Verdicts {
 		if v.LoserClaimID == "" || v.WinnerClaimID == "" {
 			continue // escalations carry no decisive loser
 		}
-		losers, err := e.claims.ListByIDs(ctx, []string{v.LoserClaimID})
-		if err != nil || len(losers) == 0 {
+		if _, dup := seen[v.LoserClaimID]; dup {
 			continue
 		}
-		l := losers[0]
+		seen[v.LoserClaimID] = struct{}{}
+		loserIDs = append(loserIDs, v.LoserClaimID)
+	}
+	if len(loserIDs) == 0 {
+		return
+	}
+	losers, err := e.claims.ListByIDs(ctx, loserIDs)
+	if err != nil {
+		return
+	}
+	for _, l := range losers {
 		if l.Lifecycle == domain.ClaimLifecyclePromoted {
 			continue // never suppress human-endorsed knowledge
 		}
@@ -589,6 +620,13 @@ func (e Engine) AnswerForRun(ctx context.Context, question, runID string) (domai
 }
 
 // AnswerForRunWithOptions is the configurable form of AnswerForRun.
+//
+// It goes through the same corrective-retrieval gate and the same post-answer
+// write-backs as AnswerWithOptions. It used to call answerWithEvents directly,
+// which meant run-scoped recall — the MCP `recall`/`query_knowledge` run path,
+// REST /v1/search with a run id, `mnemos query --run`, and the embedded store —
+// silently dropped opts.Hebbian, opts.Reconsolidate and opts.Inhibit and never
+// retried a weak answer.
 func (e Engine) AnswerForRunWithOptions(ctx context.Context, question, runID string, opts AnswerOptions) (domain.Answer, error) {
 	if strings.TrimSpace(runID) == "" {
 		return domain.Answer{}, fmt.Errorf("run id is required")
@@ -600,7 +638,39 @@ func (e Engine) AnswerForRunWithOptions(ctx context.Context, question, runID str
 	if len(events) == 0 {
 		return domain.Answer{AnswerText: fmt.Sprintf("No events found for run %q.", runID)}, nil
 	}
-	return e.answerWithEvents(ctx, question, events, opts, false)
+	ans, err := e.resolveRunAnswer(ctx, question, events, opts)
+	if err != nil {
+		return domain.Answer{}, err
+	}
+	e.applyRetrievalWriteBacks(ctx, opts, ans)
+	return ans, nil
+}
+
+// resolveRunAnswer is the run-scoped twin of resolveAnswer: one pass, then a
+// single bounded corrective pass when the first grades insufficient.
+//
+// The run's event set is already the whole corpus for this query, so the
+// "widen the corpus" half of the gate cannot apply — only the soft MinTrust
+// relaxation can recover anything, and if MinTrust was never set the retry is
+// skipped outright. As in the global gate, semantic filters are never relaxed
+// and the corrective answer is kept only if it is strictly stronger.
+func (e Engine) resolveRunAnswer(ctx context.Context, question string, events []domain.Event, opts AnswerOptions) (domain.Answer, error) {
+	ans, err := e.answerWithEvents(ctx, question, events, opts, false)
+	if err != nil {
+		return domain.Answer{}, err
+	}
+	if !recallInsufficient(ans) {
+		return ans, nil
+	}
+	relaxed, relaxedFilters := relaxRecall(opts)
+	if !relaxedFilters || !hasBudgetForCorrectiveScan(ctx) {
+		return ans, nil
+	}
+	corrected, cerr := e.answerWithEvents(ctx, question, events, relaxed, false)
+	if cerr == nil && strongerAnswer(corrected, ans) {
+		return corrected, nil
+	}
+	return ans, nil
 }
 
 // answerWithEvents resolves claims, trust, and contradictions for a set of
@@ -642,167 +712,13 @@ func (e Engine) answerWithEvents(ctx context.Context, question string, allEvents
 	if err != nil {
 		return domain.Answer{}, fmt.Errorf("load claims for query: %w", err)
 	}
-	// Drop deprecated claims before anything ranks them. `forget` and
-	// `memory_deprecate` promise that a forgotten claim stops being recalled,
-	// and BuildContextBlock honored that, but this path — the one the recall
-	// hook uses to inject context every turn — did not filter by status at all,
-	// so forgetting changed the record without changing what came back.
-	//
-	// Only deprecated is excluded. Contested is how a live disagreement is
-	// represented and hiding it would silently pick a side; resolved is the
-	// winner of one. The evidence and history of a deprecated claim stay
-	// queryable — this governs recall, not retention.
-	claims = excludeDeprecated(claims)
+	// Admission chain: deprecated-exclusion, credibility rescore, then every
+	// caller-supplied filter (entity, scope, visibility, lifecycle, min-trust,
+	// valid-time, recorded-time). Factored into admitClaims so hop expansion
+	// below can run the IDENTICAL gate — it used to append its results raw,
+	// which made `forget` and every one of these filters escapable with hops≥1.
 	nowUTC := time.Now().UTC()
-	for i := range claims {
-		if claims[i].LastExecuted.IsZero() {
-			claims[i].LastExecuted = trust.EffectiveExecutionTime(
-				claims[i].LastExecuted,
-				claims[i].LastVerified,
-				claims[i].ValidFrom,
-				claims[i].CreatedAt,
-			)
-		}
-		if claims[i].Liveness == "" || claims[i].Liveness == domain.LivenessUnknown {
-			claims[i].Liveness = trust.EvaluateLiveness(
-				claims[i].LastExecuted,
-				claims[i].LastVerified,
-				claims[i].ValidFrom,
-				claims[i].CreatedAt,
-				nowUTC,
-				claims[i].TrustScore,
-			)
-		}
-		score, rationale := trust.ScoreCredibility(trust.CredibilityInputs{
-			CurrentTrust:    claims[i].TrustScore,
-			SourceAuthority: claims[i].SourceAuthority,
-			Liveness:        claims[i].Liveness,
-			CitationCount:   claims[i].CitationCount,
-			LastExecuted:    claims[i].LastExecuted,
-			LastVerified:    claims[i].LastVerified,
-			ValidFrom:       claims[i].ValidFrom,
-			CreatedAt:       claims[i].CreatedAt,
-			Now:             nowUTC,
-			IsTest:          claims[i].Type == domain.ClaimTypeTestResult,
-			TestLastRunAt:   claims[i].TestLastRunAt,
-			TestPassCount:   claims[i].TestPassCount,
-			TestFailCount:   claims[i].TestFailCount,
-		})
-		claims[i].TrustScore = score
-		claims[i].ProvenanceRationale = rationale
-	}
-
-	// Entity scope: if the caller restricted the answer to claims
-	// linked to a specific entity (--entity in the CLI), drop
-	// everything else before ranking. The map is small (one entity's
-	// worth of claim ids); the filter is O(claims).
-	if opts.AllowedClaimIDs != nil {
-		filtered := make([]domain.Claim, 0, len(claims))
-		for _, c := range claims {
-			if _, ok := opts.AllowedClaimIDs[c.ID]; ok {
-				filtered = append(filtered, c)
-			}
-		}
-		claims = filtered
-	}
-
-	// Scope filter: narrow the candidate set to claims whose Scope
-	// matches the caller's filter before any ranking. Empty filter
-	// is a no-op so single-tenant deployments see no change.
-	if !opts.Scope.IsEmpty() {
-		filtered := make([]domain.Claim, 0, len(claims))
-		for _, c := range claims {
-			if c.Scope.Matches(opts.Scope) {
-				filtered = append(filtered, c)
-			}
-		}
-		claims = filtered
-	}
-
-	// Visibility filter: enforce workspace isolation. The zero value is
-	// treated as VisibilityTeam. Resolution is additive — each tier
-	// includes claims visible to narrower tiers:
-	//   personal → only VisibilityPersonal claims
-	//   team     → VisibilityPersonal + VisibilityTeam claims (default)
-	//   org      → all claims (no filter needed)
-	vis := opts.Visibility
-	if vis == "" {
-		vis = domain.VisibilityTeam
-	}
-	if vis != domain.VisibilityOrg {
-		allowed := visibilityAllowed(vis)
-		filtered := make([]domain.Claim, 0, len(claims))
-		for _, c := range claims {
-			cv := c.Visibility
-			if cv == "" {
-				cv = domain.VisibilityTeam
-			}
-			if allowed[cv] {
-				filtered = append(filtered, c)
-			}
-		}
-		claims = filtered
-	}
-
-	// Lifecycle filter: narrow to a promotion state when requested. Empty
-	// is a no-op, so ordinary recall (including claims that were never
-	// routed through a candidate→promoted review) is unchanged.
-	if opts.Lifecycle != "" {
-		filtered := make([]domain.Claim, 0, len(claims))
-		for _, c := range claims {
-			if c.Lifecycle == opts.Lifecycle {
-				filtered = append(filtered, c)
-			}
-		}
-		claims = filtered
-	}
-
-	// Filter out low-trust claims before ranking — saves work on the
-	// cosine pass and prevents low-trust noise from displacing
-	// high-trust answers in the top-N.
-	if opts.MinTrust > 0 {
-		filtered := make([]domain.Claim, 0, len(claims))
-		for _, c := range claims {
-			if c.TrustScore >= opts.MinTrust {
-				filtered = append(filtered, c)
-			}
-		}
-		claims = filtered
-	}
-
-	// Temporal filter: by default, exclude claims that have been
-	// superseded (valid_to in the past). Callers asking for history
-	// (--include-history) opt out; --at <date> queries swap the
-	// cutoff for a point-in-time check.
-	if !opts.IncludeHistory {
-		asOf := opts.AsOf
-		if asOf.IsZero() {
-			asOf = time.Now().UTC()
-		}
-		filtered := make([]domain.Claim, 0, len(claims))
-		for _, c := range claims {
-			if c.IsValidAt(asOf) {
-				filtered = append(filtered, c)
-			}
-		}
-		claims = filtered
-	}
-
-	// Ingestion-time filter (the second axis of the bi-temporal
-	// model). Drop rows recorded after RecordedAsOf so the response
-	// reproduces what the store knew at that timestamp. Independent
-	// of the validity filter — a claim that was valid yesterday but
-	// recorded today returns under (AsOf=yesterday, RecordedAsOf=now)
-	// and disappears under (AsOf=yesterday, RecordedAsOf=yesterday).
-	if !opts.RecordedAsOf.IsZero() {
-		filtered := make([]domain.Claim, 0, len(claims))
-		for _, c := range claims {
-			if !c.CreatedAt.After(opts.RecordedAsOf) {
-				filtered = append(filtered, c)
-			}
-		}
-		claims = filtered
-	}
+	claims = admitClaims(claims, opts, nowUTC)
 
 	// Re-rank claims by semantic similarity when embeddings are available. When
 	// salience bias is enabled (ADR 0013 §4), a bounded stakes term is blended into
@@ -826,7 +742,27 @@ func (e Engine) answerWithEvents(ctx context.Context, question string, allEvents
 			// rather than failing the whole answer.
 			return domain.Answer{}, fmt.Errorf("expand claims by %d hops: %w", opts.Hops, err)
 		}
-		claims = append(claims, expanded...)
+		// Hop-expanded claims enter the answer through the SAME gate as direct
+		// hits. Without this a single hop resurrected claims the caller had
+		// `forget`-ten and slipped past --scope / --visibility / --lifecycle /
+		// --min-trust / --at, and the survivors carried an un-rescored trust
+		// score that was then ranked against rescored direct hits.
+		admitted := admitClaims(expanded, opts, nowUTC)
+		if len(admitted) != len(expanded) {
+			// expandClaimsByHops recorded a hop distance for every claim it
+			// discovered; drop the ones admission rejected so
+			// Answer.ClaimHopDistance describes exactly the returned set.
+			kept := make(map[string]struct{}, len(admitted))
+			for _, c := range admitted {
+				kept[c.ID] = struct{}{}
+			}
+			for _, c := range expanded {
+				if _, ok := kept[c.ID]; !ok {
+					delete(hopDistance, c.ID)
+				}
+			}
+		}
+		claims = append(claims, admitted...)
 	}
 
 	// Spreading-activation priming (ADR 0013 §2): re-rank the assembled claim
@@ -1199,7 +1135,24 @@ func computeStaleClaims(claims []domain.Claim, now time.Time) []string {
 //   - contradiction penalty (presence of unresolved contradictions reduces confidence)
 //   - recency (fresher claims = higher confidence)
 //
-// A value ≥ 0.9 means the answer is "never wrong on recall" grade.
+// # RANGE
+//
+// The positive weights are 0.4 (trust) + 0.2 (density) + 0.1 (recency), so the
+// score is structurally capped at 0.7 and a contradiction can only subtract
+// from that. The doc used to claim "≥ 0.9 means never-wrong-on-recall grade",
+// which was unreachable: nothing keyed to 0.9 could ever fire.
+//
+// The DOC was wrong, not the maths. The 0.7 cap is what
+// recallSufficiencyFloor (0.35) is calibrated against — it is deliberately half
+// the attainable maximum, so a grounded answer clears it and an empty or weakly
+// supported one falls under it and triggers the corrective pass. Re-scaling the
+// weights to reach 1.0 would silently move that gate (and every recall-gate
+// baseline measured through it) to buy a nicer-looking number. The
+// "never wrong on recall" target is a suite-level pass rate
+// (DefaultSLOs.MinRecallPassRate = 0.95), not a per-answer confidence.
+//
+// So: 0.7 is the maximum. Compare against recallSufficiencyFloor, never
+// against an absolute like 0.9.
 func computeConfidence(claims []domain.Claim, contradictions []domain.Relationship, now time.Time) float64 {
 	if len(claims) == 0 {
 		return 0.0
@@ -1898,23 +1851,39 @@ func rankEvents(question string, events []domain.Event, limit int) []domain.Even
 }
 
 func collectContradictions(ctx context.Context, repo ports.RelationshipRepository, claims []domain.Claim) ([]domain.Relationship, error) {
-	seen := map[string]struct{}{}
 	result := make([]domain.Relationship, 0)
+	if len(claims) == 0 {
+		return result, nil
+	}
+	// One round trip, not one per claim. This runs twice on the main recall
+	// path (once before contradiction resolution and again after it, against
+	// the pruned set) and AFTER hop expansion, so the per-claim loop it
+	// replaces was 100–300 serialised queries on a normal recall.
+	// ListByClaimIDs has identical semantics — every edge touching any of the
+	// ids, as source OR target — and already backs hop expansion and priming.
+	ids := make([]string, 0, len(claims))
+	seenClaim := make(map[string]struct{}, len(claims))
 	for _, claim := range claims {
-		rels, err := repo.ListByClaim(ctx, claim.ID)
-		if err != nil {
-			return nil, err
+		if _, dup := seenClaim[claim.ID]; dup {
+			continue
 		}
-		for _, rel := range rels {
-			if rel.Type != domain.RelationshipTypeContradicts {
-				continue
-			}
-			if _, ok := seen[rel.ID]; ok {
-				continue
-			}
-			seen[rel.ID] = struct{}{}
-			result = append(result, rel)
+		seenClaim[claim.ID] = struct{}{}
+		ids = append(ids, claim.ID)
+	}
+	rels, err := repo.ListByClaimIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]struct{}{}
+	for _, rel := range rels {
+		if rel.Type != domain.RelationshipTypeContradicts {
+			continue
 		}
+		if _, ok := seen[rel.ID]; ok {
+			continue
+		}
+		seen[rel.ID] = struct{}{}
+		result = append(result, rel)
 	}
 	return result, nil
 }
