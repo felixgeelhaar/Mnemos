@@ -701,7 +701,7 @@ func inferRelationshipFromOverlapWithContext(overlap int, aTokens map[string]str
 	// Claims that share most tokens but differ on 1 key token are competing
 	// alternatives (e.g., "use PostgreSQL" vs "prefers MySQL").
 	// Skipped for pairs of enumerated list items (Phase 1 vs Phase 2).
-	if !skipValueDivergence && valueDivergesFromOverlap(len(aTokens), len(bTokens), overlap) {
+	if !skipValueDivergence && detectValueDivergence(len(aTokens), len(bTokens), overlap) {
 		return domain.RelationshipTypeContradicts, true
 	}
 
@@ -727,15 +727,11 @@ func isEnumeratedItem(text string) bool {
 // Uses strict ratio-based rules to avoid false positives on enumerated list
 // items (e.g., "Phase 1: ..." vs "Phase 2: ...") which share tokens but are
 // parallel items, not competing alternatives.
-func detectValueDivergence(a, b map[string]struct{}) bool {
-	return valueDivergesFromOverlap(len(a), len(b), contentOverlap(a, b))
-}
-
-// valueDivergesFromOverlap is detectValueDivergence expressed over the token
-// counts and the overlap alone — it never needed the sets themselves. Taking
-// the overlap as an argument lets the incremental path reuse the count the
-// candidate index already produced.
-func valueDivergesFromOverlap(la, lb, overlap int) bool {
+//
+// It takes the token counts and the overlap rather than the sets themselves —
+// it never needed more than that — which lets the incremental path reuse the
+// overlap the candidate index already produced.
+func detectValueDivergence(la, lb, overlap int) bool {
 	if la < 2 || lb < 2 {
 		return false
 	}
