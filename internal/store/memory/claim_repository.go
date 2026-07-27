@@ -218,17 +218,28 @@ func (r ClaimRepository) RepointEvidence(_ context.Context, fromClaimID, toClaim
 	return nil
 }
 
-// DeleteCascade removes a claim plus its claim-owned dependents.
+// DeleteCascade removes a claim plus every claim-keyed collection it
+// owns: evidence, status history, the version chain, the feedback
+// counters and the forward expectation — the full canonical set from
+// [ports.ClaimRepository], since the in-memory backend models all five.
+//
+// The dependent drops run even when the claim itself is already gone.
+// Returning early on a missing claim made this the one backend where a
+// resumed delete could NOT finish the job: the SQL backends' DELETEs are
+// unconditional, so a crash between the claim delete and a retry left
+// memory holding residue nothing would ever clear.
 func (r ClaimRepository) DeleteCascade(_ context.Context, claimID string) error {
 	r.state.mu.Lock()
 	defer r.state.mu.Unlock()
-	if _, ok := r.state.claims[claimID]; !ok {
-		return nil
+	if _, ok := r.state.claims[claimID]; ok {
+		delete(r.state.claims, claimID)
+		r.state.claimOrder = removeStringFromSlice(r.state.claimOrder, claimID)
 	}
-	delete(r.state.claims, claimID)
-	r.state.claimOrder = removeStringFromSlice(r.state.claimOrder, claimID)
 	delete(r.state.evidence, claimID)
 	delete(r.state.statusHistory, claimID)
+	delete(r.state.claimVersions, claimID)
+	delete(r.state.feedback, claimID)
+	delete(r.state.expectations, claimID)
 	return nil
 }
 

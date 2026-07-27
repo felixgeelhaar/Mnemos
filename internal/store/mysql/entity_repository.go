@@ -58,6 +58,15 @@ INSERT IGNORE INTO claim_entities (claim_id, entity_id, role) VALUES (?, ?, ?)`,
 	return nil
 }
 
+// UnlinkClaim drops every claim_entities row for the claim. Deleting
+// nothing is success, so a retried merge or delete converges.
+func (r EntityRepository) UnlinkClaim(ctx context.Context, claimID string) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM claim_entities WHERE claim_id = ?`, claimID); err != nil {
+		return fmt.Errorf("unlink entities for claim %s: %w", claimID, err)
+	}
+	return nil
+}
+
 // List returns all entities ordered by name.
 func (r EntityRepository) List(ctx context.Context) ([]domain.Entity, error) {
 	rows, err := r.db.QueryContext(ctx, `

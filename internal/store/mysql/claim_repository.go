@@ -225,7 +225,16 @@ SELECT ?, event_id FROM claim_evidence WHERE claim_id = ?`,
 	return nil
 }
 
-// DeleteCascade drops claim + claim-owned dependents in one tx.
+// DeleteCascade drops the claim plus every claim-keyed row it owns, in
+// one tx.
+//
+// The set is the canonical one from [ports.ClaimRepository], narrowed to
+// the tables this backend declares: claim_evidence,
+// claim_status_history, then the claim row. MySQL has no
+// claim_versions, claim_feedback or claim_expectations table, so there
+// is nothing to clear for those — if one is ever added to schema.sql it
+// must be added here in the same change, or a delete on MySQL will mean
+// something different from a delete on SQLite.
 func (r ClaimRepository) DeleteCascade(ctx context.Context, claimID string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
