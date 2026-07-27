@@ -2,9 +2,7 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -83,21 +81,9 @@ func maybeSleep(now time.Time) bool {
 	if hostedConfigured() || !sleepDue(now) {
 		return false
 	}
-	self, err := os.Executable()
-	if err != nil {
+	if !spawnWorker(sleepArgs()) {
 		return false
 	}
-	args := sleepArgs()
-	if dsn := strings.TrimSpace(os.Getenv("MNEMOS_DB_URL")); dsn != "" {
-		args = append(args, "--db", dsn)
-	}
-	cmd := exec.Command(self, args...) //nolint:gosec // self-exec with fixed args
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
-	cmd.SysProcAttr = detachSysProcAttr()
-	if err := cmd.Start(); err != nil {
-		return false
-	}
-	_ = cmd.Process.Release()
 	markSleep(now)
 	return true
 }

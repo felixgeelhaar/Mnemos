@@ -135,15 +135,18 @@ func extractTranscriptTextFrom(path string, offset int64, maxBytes int) (string,
 // given hook sub-command and hands it the event JSON on stdin, then returns
 // without waiting. The user's editor loop never blocks on extraction.
 func spawnDetachedCapture(sub string, payload []byte) error {
+	// This site cannot route through spawnWorker: it hands the payload over as a
+	// real file descriptor (see below), which the shared helper has no way to
+	// express. The guard is therefore repeated here rather than inherited —
+	// re-execing a test binary forks the whole suite (see selfexec.go).
+	if underTest() {
+		return nil
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	args := []string{"hook", sub, "--worker"}
-	if dsn := strings.TrimSpace(os.Getenv("MNEMOS_DB_URL")); dsn != "" {
-		args = append(args, "--db", dsn)
-	}
-	cmd := exec.Command(self, args...) //nolint:gosec // self-exec with fixed args
+	cmd := exec.Command(self, workerArgs([]string{"hook", sub, "--worker"})...) //nolint:gosec // self-exec with fixed args
 
 	// Hand the payload over as a real file descriptor, not an io.Reader.
 	// os/exec services a non-*os.File Stdin with a copier goroutine in THIS
