@@ -849,20 +849,6 @@
       "created_at": "2026-07-25T19:24:07.826791Z"
     },
     {
-      "fingerprint": "3138f12773b8c085438a8c721a02019e358c9d9a918571854cd0e362f298158f",
-      "rule_id": "SEC-147",
-      "file_path": "internal/trust/trust_test.go",
-      "severity": "high",
-      "created_at": "2026-07-25T19:24:07.826791Z"
-    },
-    {
-      "fingerprint": "4e0d97f70082490e25dcd600ef8fe228e1430730f29c69ac4f19b34734f18d04",
-      "rule_id": "SEC-147",
-      "file_path": "internal/trust/trust_test.go",
-      "severity": "high",
-      "created_at": "2026-07-25T19:24:07.826791Z"
-    },
-    {
       "fingerprint": "0412731a55eb18a16b5488267cfe900e7350f5d653cd4f32a595a2cc1d1e319e",
       "rule_id": "SEC-161",
       "file_path": "internal/store/sqlite/db.go",
@@ -901,20 +887,6 @@
       "fingerprint": "78e1221bb6335e75fb5489f4d5fa7e0eac97fafde58c338a83913b80e6b2d2b5",
       "rule_id": "SEC-163",
       "file_path": "cmd/mnemos/registry.go",
-      "severity": "medium",
-      "created_at": "2026-07-25T19:24:07.826791Z"
-    },
-    {
-      "fingerprint": "9c58b4632c89e89871660573e1e663e4ffa3534d9d694748d7107351e12b7ae7",
-      "rule_id": "SEC-163",
-      "file_path": "internal/embedding/gemini.go",
-      "severity": "medium",
-      "created_at": "2026-07-25T19:24:07.826791Z"
-    },
-    {
-      "fingerprint": "6ade0378c3e80fb0a0cc0c017f1bef866c726652863f16ddbf7ae8e6b1ca54b8",
-      "rule_id": "SEC-163",
-      "file_path": "internal/llm/gemini.go",
       "severity": "medium",
       "created_at": "2026-07-25T19:24:07.826791Z"
     },
@@ -973,6 +945,62 @@
       "file_path": "test/integration/docker-compose.yml",
       "severity": "high",
       "created_at": "2026-07-25T19:24:07.826791Z"
+    },
+    {
+      "fingerprint": "44105146008bfa13cc64be5d77840c8b4c5921b961c9fef9cd29fa0009af846d",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/promote_approval_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-27T07:26:59.576707Z"
+    },
+    {
+      "fingerprint": "678a2009911c2943e66bc33fb720819c228cd84363feed0e32544ce29a8a1301",
+      "rule_id": "DATA-001",
+      "file_path": "cmd/mnemos/serve_ratelimit_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-27T07:26:59.576707Z"
+    },
+    {
+      "fingerprint": "b889ca378733d4f574cdf54209731b7d6538344befa8a1ec14ab48da3a8fc99c",
+      "rule_id": "DATA-005",
+      "file_path": "cmd/mnemos/serve_ratelimit_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-27T07:26:59.576707Z"
+    },
+    {
+      "fingerprint": "556be1bcb2a80ac78b82c39c9b40b651250c41a3f85c3ecbe1a35c922bcb30fc",
+      "rule_id": "DATA-005",
+      "file_path": "cmd/mnemos/serve_ratelimit_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-27T07:26:59.576707Z"
+    },
+    {
+      "fingerprint": "3fb60cdb2a06cb2a14fa312bc89eca60d0bb1d319553dad579a7e07a10e1792c",
+      "rule_id": "SEC-161",
+      "file_path": "internal/store/sqlite/lesson_hydration_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-27T07:26:59.576707Z"
+    },
+    {
+      "fingerprint": "a0283c992cd54e4d1d173121856e0cbff6059195817d03c741c751f974dd0e14",
+      "rule_id": "SEC-163",
+      "file_path": "cmd/mnemos/setup_token_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-27T07:26:59.576707Z"
+    },
+    {
+      "fingerprint": "29985896d64b96dbf7db5fe298bdc98922204d3fc9a334be3e4c0a9b80a5cff7",
+      "rule_id": "SEC-163",
+      "file_path": "cmd/mnemos/watch_confine_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-27T07:26:59.576707Z"
+    },
+    {
+      "fingerprint": "a54eeeeb4255844b413b573b279fc096c680d879d92df1ed4e48c9c96c1b4ea5",
+      "rule_id": "SEC-163",
+      "file_path": "internal/store/sqlite/lesson_hydration_test.go",
+      "severity": "medium",
+      "created_at": "2026-07-27T07:26:59.576707Z"
     }
   ]
 }
