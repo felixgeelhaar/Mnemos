@@ -5,6 +5,7 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime/debug"
 	"sync"
@@ -162,6 +163,37 @@ func (s *Server) memFor(ctx context.Context) mnemos.Memory {
 	}
 	s.tenantMems[tenant] = tm
 	return tm
+}
+
+// Close releases what the server itself allocated: the per-tenant Memory views
+// memFor built and cached. Each of those owns a store connection, and nothing
+// ever released them — a long-lived multi-tenant process leaked one per tenant
+// it had ever served. The HTTP surface closes its equivalent map; this one had
+// no way to be closed at all.
+//
+// The borrowed conn, the shared facade and the writer are deliberately left
+// alone: NewServer borrows them and the caller keeps its close discipline.
+//
+// Safe to call twice, and safe to call while requests are in flight: the cache
+// is detached under the same mutex memFor takes, so a second call finds it
+// empty and a concurrent memFor simply rebuilds a view rather than handing back
+// one that is being closed.
+func (s *Server) Close() error {
+	s.tenantMemMu.Lock()
+	cached := s.tenantMems
+	s.tenantMems = map[string]mnemos.Memory{}
+	s.tenantMemMu.Unlock()
+
+	var errs []error
+	for tenant, m := range cached {
+		if m == nil {
+			continue
+		}
+		if err := m.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close memory for tenant %q: %w", tenant, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Register registers the Mnemos service on the provided gRPC server.
@@ -426,6 +458,25 @@ func (s *Server) ListEpisodes(ctx context.Context, req *mnemosv1.ListEpisodesReq
 		return nil, status.Errorf(codes.Internal, "list episodes: %v", err)
 	}
 
+	// F.4.b on the read side. A run-scoped bearer could call this and get the
+	// entire episode log, which made the whitelist a write-only boundary: the
+	// data it was meant to protect was one unfiltered list call away.
+	//
+	// ListEpisodesRequest has no run_id field, so "reject a request for someone
+	// else's run" is not expressible here — the only fail-closed reading is to
+	// intersect the result with the whitelist. Episodes with no run at all are
+	// dropped too: a run-scoped token was granted named runs, and "unassigned"
+	// is not one of them.
+	if allowed := allowedRunsFromContext(ctx); len(allowed) > 0 {
+		kept := all[:0]
+		for _, e := range all {
+			if runAllowed(allowed, e.RunID) {
+				kept = append(kept, e)
+			}
+		}
+		all = kept
+	}
+
 	reversed := make([]domain.Event, len(all))
 	for i, e := range all {
 		reversed[len(all)-1-i] = e
@@ -450,6 +501,20 @@ func (s *Server) AppendEpisodes(ctx context.Context, req *mnemosv1.AppendEpisode
 	}
 	if len(req.Episodes) > maxBatchRecords {
 		return nil, status.Errorf(codes.InvalidArgument, "episodes batch size %d exceeds max %d", len(req.Episodes), maxBatchRecords)
+	}
+
+	// F.4.b: the run id here is caller-supplied and written verbatim, so a
+	// run-scoped bearer could mint episodes into any run it liked — including
+	// runs it is forbidden to read — and then hang evidence off them. Checked
+	// against the whitelist directly (no store lookup: the run is in the
+	// payload) and BEFORE the write, so a rejected batch leaves nothing behind.
+	if allowed := allowedRunsFromContext(ctx); len(allowed) > 0 {
+		for i, e := range req.Episodes {
+			if !runAllowed(allowed, e.RunId) {
+				return nil, status.Errorf(codes.PermissionDenied,
+					"episodes[%d] %q (run %q) not in token whitelist", i, e.Id, e.RunId)
+			}
+		}
 	}
 
 	events := make([]domain.Event, 0, len(req.Episodes))
@@ -508,18 +573,40 @@ func (s *Server) ListBeliefs(ctx context.Context, req *mnemosv1.ListBeliefsReque
 		return nil, status.Errorf(codes.InvalidArgument, "invalid status %q", statusFilter)
 	}
 
-	// Build the allowed-event set when run_id is requested. Empty set →
-	// no claims belong to this run; return early to avoid leaking
+	// F.4.b on the read side. run_id was an OPTIONAL filter the caller chose,
+	// never a boundary the token imposed: a run-scoped bearer that simply
+	// omitted it read every belief in the store. The whitelist now decides
+	// which runs are legible, and run_id only narrows within it.
+	//
+	// Naming a run outside the whitelist is refused rather than silently
+	// answered with an empty page — a caller that cannot tell "no beliefs" from
+	// "not yours" will read the first as fact.
+	allowedRuns := allowedRunsFromContext(ctx)
+	var runFilters []string
+	switch {
+	case runIDFilter != "":
+		if !runAllowed(allowedRuns, runIDFilter) {
+			return nil, status.Errorf(codes.PermissionDenied, "run_id %q not in token whitelist", runIDFilter)
+		}
+		runFilters = []string{runIDFilter}
+	case len(allowedRuns) > 0:
+		runFilters = allowedRuns
+	}
+
+	// Build the allowed-event set from the effective runs. Empty set →
+	// no claims belong to them; return early to avoid leaking
 	// unfiltered claims (ADR-002 / Thor's safety audit).
 	var allowedEventIDs map[string]struct{}
-	if runIDFilter != "" {
-		events, err := s.connFor(ctx).Events.ListByRunID(ctx, runIDFilter)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "list episodes by run id: %v", err)
-		}
-		allowedEventIDs = make(map[string]struct{}, len(events))
-		for _, e := range events {
-			allowedEventIDs[e.ID] = struct{}{}
+	if len(runFilters) > 0 {
+		allowedEventIDs = map[string]struct{}{}
+		for _, run := range runFilters {
+			events, err := s.connFor(ctx).Events.ListByRunID(ctx, run)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "list episodes by run id: %v", err)
+			}
+			for _, e := range events {
+				allowedEventIDs[e.ID] = struct{}{}
+			}
 		}
 		if len(allowedEventIDs) == 0 {
 			return &mnemosv1.ListBeliefsResponse{Limit: int32(limit), Offset: int32(offset)}, nil
@@ -787,6 +874,29 @@ func (s *Server) AppendAssociations(ctx context.Context, req *mnemosv1.AppendAss
 		})
 	}
 
+	// F.4.b: an association is a claim about two beliefs, so writing one into
+	// another run's graph is a write into that run. Both endpoints' evidence
+	// must resolve to episodes inside the whitelist — checked before the write,
+	// mirroring the REST relationship handler.
+	if allowed := allowedRunsFromContext(ctx); len(allowed) > 0 {
+		claimIDs := make([]string, 0, len(rels)*2)
+		for _, rel := range rels {
+			claimIDs = append(claimIDs, rel.FromClaimID, rel.ToClaimID)
+		}
+		evIDs, err := claimEventIDs(ctx, s.connFor(ctx), claimIDs)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "run-scope lookup: %v", err)
+		}
+		bad, badRun, err := checkEventRunsAllowed(ctx, s.connFor(ctx), evIDs, allowed)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "run-scope check: %v", err)
+		}
+		if bad != "" {
+			return nil, status.Errorf(codes.PermissionDenied,
+				"association references episode %q (run %q) not in token whitelist", bad, badRun)
+		}
+	}
+
 	if _, err := s.writerFor(ctx).Relationships(ctx, rels); err != nil {
 		return nil, status.Errorf(codes.Internal, "upsert associations: %v", err)
 	}
@@ -837,6 +947,37 @@ func (s *Server) AppendEmbeddings(ctx context.Context, req *mnemosv1.AppendEmbed
 	}
 	if len(req.Embeddings) > maxBatchRecords {
 		return nil, status.Errorf(codes.InvalidArgument, "embeddings batch size %d exceeds max %d", len(req.Embeddings), maxBatchRecords)
+	}
+
+	// F.4.b: an embedding is a searchable index entry for its entity, so
+	// writing one for another run's episode or belief plants a row in that
+	// run's retrieval surface. Event entities resolve to a run directly; claim
+	// entities resolve through their evidence. Checked before the loop below,
+	// which writes each row as it goes — a mid-loop rejection would leave a
+	// partial batch behind.
+	if allowed := allowedRunsFromContext(ctx); len(allowed) > 0 {
+		var eventIDs, claimIDs []string
+		for _, e := range req.Embeddings {
+			switch e.EntityType {
+			case "event":
+				eventIDs = append(eventIDs, e.EntityId)
+			case "claim":
+				claimIDs = append(claimIDs, e.EntityId)
+			}
+		}
+		extraEvents, err := claimEventIDs(ctx, s.connFor(ctx), claimIDs)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "run-scope lookup: %v", err)
+		}
+		eventIDs = append(eventIDs, extraEvents...)
+		bad, badRun, err := checkEventRunsAllowed(ctx, s.connFor(ctx), eventIDs, allowed)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "run-scope check: %v", err)
+		}
+		if bad != "" {
+			return nil, status.Errorf(codes.PermissionDenied,
+				"embedding entity references episode %q (run %q) not in token whitelist", bad, badRun)
+		}
 	}
 
 	actor := actorFromContext(ctx)
