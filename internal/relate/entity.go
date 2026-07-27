@@ -27,7 +27,21 @@ import (
 // Out of scope: cross-language proper-noun resolution, alias
 // reconciliation ("Alice Smith" vs "Alice"), pronoun resolution.
 func detectEntityRoleDivergence(aText, bText string, aTokens, bTokens map[string]struct{}) bool {
-	la, lb := len(aTokens), len(bTokens)
+	return entityRoleDivergesPre(
+		len(aTokens), len(bTokens), contentOverlap(aTokens, bTokens),
+		func() map[string]struct{} { return properNounTokens(aText) },
+		func() map[string]struct{} { return properNounTokens(bText) },
+	)
+}
+
+// entityRoleDivergesPre is detectEntityRoleDivergence with the token-set sizes
+// and the overlap supplied by the caller, and with the proper-noun extraction
+// behind thunks so it is still only paid when the cheap shape guards pass.
+//
+// The incremental path already knows the overlap (it comes out of the candidate
+// index) and already caches each claim's proper nouns, so recomputing both per
+// pair was pure waste.
+func entityRoleDivergesPre(la, lb, overlap int, aProperFn, bProperFn func() map[string]struct{}) bool {
 	if la == 0 || lb == 0 {
 		return false
 	}
@@ -41,7 +55,6 @@ func detectEntityRoleDivergence(aText, bText string, aTokens, bTokens map[string
 		return false
 	}
 
-	overlap := contentOverlap(aTokens, bTokens)
 	if overlap < 1 {
 		return false
 	}
@@ -51,8 +64,8 @@ func detectEntityRoleDivergence(aText, bText string, aTokens, bTokens map[string
 		return false
 	}
 
-	aProperNouns := properNounTokens(aText)
-	bProperNouns := properNounTokens(bText)
+	aProperNouns := aProperFn()
+	bProperNouns := bProperFn()
 	if len(aProperNouns) == 0 && len(bProperNouns) == 0 {
 		// No capitalized non-leading tokens on either side — likely
 		// not a named-entity claim. Fall back to other detectors.
