@@ -224,16 +224,33 @@ func (s *Server) memFor(ctx context.Context) mnemos.Memory {
 	if rm, ok := ctx.Value(tenantMemKey{}).(*requestMem); ok && rm != nil {
 		return rm.get(s.mem, tenant)
 	}
+
 	s.tenantMemMu.Lock()
-	defer s.tenantMemMu.Unlock()
-	if m, cached := s.tenantMems[tenant]; cached {
+	m, cached := s.tenantMems[tenant]
+	s.tenantMemMu.Unlock()
+	if cached {
 		return m
 	}
+
+	// Built WITHOUT the lock held. Tenant() opens a connection, so holding the
+	// mutex across it made one slow dial block every other tenant's memFor —
+	// and Close(), which takes the same mutex, so a shutdown during a stalled
+	// open hung instead of proceeding. Same shape as openConn's cache in
+	// cmd/mnemos/dsn.go (#150).
 	tm, err := s.mem.Tenant(tenant)
 	if err != nil {
 		return nil
 	}
+	s.tenantMemMu.Lock()
+	if existing, ok := s.tenantMems[tenant]; ok {
+		// Lost the race to open the same tenant concurrently — keep the winner
+		// and close our redundant view, which owns a connection of its own.
+		s.tenantMemMu.Unlock()
+		_ = tm.Close()
+		return existing
+	}
 	s.tenantMems[tenant] = tm
+	s.tenantMemMu.Unlock()
 	return tm
 }
 

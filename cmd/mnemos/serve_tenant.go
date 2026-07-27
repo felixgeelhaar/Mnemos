@@ -139,15 +139,31 @@ func scopedMem(ctx context.Context, fallback mnemos.Memory) mnemos.Memory {
 		return rm.get(fallback, tenant)
 	}
 	tenantMemMu.Lock()
-	defer tenantMemMu.Unlock()
-	if m, cached := tenantMemsSrv[tenant]; cached {
+	m, cached := tenantMemsSrv[tenant]
+	tenantMemMu.Unlock()
+	if cached {
 		return m
 	}
+
+	// Built WITHOUT the lock held. Tenant() opens a connection, so holding the
+	// mutex across it made one slow dial block every other tenant's scopedMem —
+	// and closeTenantMems, which takes the same mutex, so a shutdown during a
+	// stalled open hung instead of proceeding. Same shape as openConn's cache in
+	// dsn.go (#150).
 	tm, err := fallback.Tenant(tenant)
 	if err != nil {
 		return nil
 	}
+	tenantMemMu.Lock()
+	if existing, ok := tenantMemsSrv[tenant]; ok {
+		// Lost the race to open the same tenant concurrently — keep the winner
+		// and close our redundant view, which owns a connection of its own.
+		tenantMemMu.Unlock()
+		_ = tm.Close()
+		return existing
+	}
 	tenantMemsSrv[tenant] = tm
+	tenantMemMu.Unlock()
 	return tm
 }
 
