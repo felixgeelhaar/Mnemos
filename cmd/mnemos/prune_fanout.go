@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"go.klarlabs.de/mnemos/internal/domain"
 	"go.klarlabs.de/mnemos/internal/govwrite"
@@ -26,6 +27,22 @@ import (
 // strongest corroborations for each claim are kept, chosen by the same rule
 // detection now applies, so the result matches what a fresh `relate` pass would
 // produce rather than approximating it.
+// Write-phase throughput, measured on an M-series laptop against SQLite brains
+// of 80 MB-1.6 GB: the governed writer re-reads and rewrites one claim's edge
+// set per affected claim, so cost tracks claims touched, not edges dropped.
+// The pair brackets the observed spread rather than pretending to one number.
+const (
+	claimsPerMinuteFast = 1200
+	claimsPerMinuteSlow = 400
+)
+
+// writePhaseEstimate returns the pessimistic end of the write-phase estimate —
+// the figure worth comparing against the job budget, since it is the slow case
+// that overruns it.
+func writePhaseEstimate(claimsAffected int) time.Duration {
+	return time.Duration(1+claimsAffected/claimsPerMinuteSlow) * time.Minute
+}
+
 func pruneFanOut(dryRun bool, f Flags) {
 	err := runJob("prune-fan-out", map[string]string{"dry_run": fmt.Sprint(dryRun)}, f.Verbose,
 		func(ctx context.Context, job *workflow.Job, w *govwrite.Writer) error {
@@ -89,8 +106,22 @@ func pruneFanOut(dryRun bool, f Flags) {
 			// individually so the drop stays auditable and restorable. That is
 			// the right trade for a one-time repair, but on a large brain it is
 			// minutes, not seconds — say so rather than letting it look hung.
+			slowest := writePhaseEstimate(len(worst))
 			fmt.Printf("this rewrites each affected claim through the write audit — expect roughly %d-%d minute(s)\n",
-				1+len(worst)/1200, 1+len(worst)/400)
+				1+len(worst)/claimsPerMinuteFast, int(slowest.Minutes()))
+
+			// A pass that cannot finish inside the job budget is not merely slow:
+			// the attempt is cancelled mid-write and retried from a fresh scan.
+			// Written progress survives (the drop is per claim), so it does
+			// converge across retries — but each one repeats the full scan and
+			// the job ultimately fails, which reads as "the command is broken".
+			// Say so up front, with the number to set.
+			if budget := jobTimeout(); slowest > budget {
+				fmt.Printf("\nwarning: this needs up to %s but MNEMOS_JOB_TIMEOUT is %s, so it will be\n", slowest, budget)
+				fmt.Printf("         cancelled mid-write and retried from a fresh scan. Re-run as:\n")
+				fmt.Printf("             MNEMOS_JOB_TIMEOUT=%dh mnemos prune --fan-out ...\n", 1+int(slowest.Hours()))
+				fmt.Printf("         (progress already written is kept, so a re-run resumes.)\n\n")
+			}
 
 			if dryRun {
 				fmt.Println("\n(dry run — nothing written; re-run without --dry-run to apply)")
