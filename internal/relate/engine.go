@@ -68,6 +68,8 @@ const minOverlapRatio = 0.3
 // score 0.33-0.67 here, while false pairings score 0.20-0.25.
 const minContradictionCoverage = 0.3
 
+// The `supports` fan-out cap and its selection rule live in fanout.go.
+
 // actionPrefixes mark a raw (un-stemmed) token as describing an
 // action — something an actor *did*. Matched against the raw
 // lowercase tokens of the claim so a single entry covers most
@@ -264,10 +266,16 @@ func (e Engine) DetectIncremental(newClaims []domain.Claim, existingClaims []dom
 		existCache[i] = analyzed{text: existingClaims[i].Text, tokens: tokens, neg: neg}
 	}
 
+	// Candidates for the current new claim, refilled per iteration. Collecting
+	// before emitting is what makes the fan-out cap possible: the strongest
+	// corroborations cannot be known until every existing claim has been scored.
+	var candidates []fanOutCandidate
+
 	for i := 0; i < len(newClaims); i++ {
 		if len(newCache[i].tokens) == 0 {
 			continue
 		}
+		candidates = candidates[:0]
 		for j := 0; j < len(existingClaims); j++ {
 			if len(existCache[j].tokens) == 0 {
 				continue
@@ -293,6 +301,15 @@ func (e Engine) DetectIncremental(newClaims []domain.Claim, existingClaims []dom
 				continue
 			}
 
+			// Only `supports` competes for the budget, so only it needs a score.
+			score := 0
+			if relType == domain.RelationshipTypeSupports {
+				score = contentOverlap(newCache[i].tokens, existCache[j].tokens)
+			}
+			candidates = append(candidates, fanOutCandidate{index: j, relType: relType, score: score})
+		}
+
+		for _, c := range selectFanOut(candidates, MaxSupportsPerClaim) {
 			id, err := e.nextID()
 			if err != nil {
 				return nil, err
@@ -300,9 +317,9 @@ func (e Engine) DetectIncremental(newClaims []domain.Claim, existingClaims []dom
 
 			rels = append(rels, domain.Relationship{
 				ID:          id,
-				Type:        relType,
+				Type:        c.relType,
 				FromClaimID: newClaims[i].ID,
-				ToClaimID:   existingClaims[j].ID,
+				ToClaimID:   existingClaims[c.index].ID,
 				CreatedAt:   now,
 			})
 		}

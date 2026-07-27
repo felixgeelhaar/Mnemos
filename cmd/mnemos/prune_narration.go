@@ -153,9 +153,9 @@ func pct(n, total int) float64 {
 	return 100 * float64(n) / float64(total)
 }
 
-// handlePrune routes `mnemos prune <--narration|--session-noise> [--dry-run]`.
-// The kind is a required flag rather than a default so a bare `prune` never
-// guesses at a destructive operation.
+// handlePrune routes `mnemos prune <--narration|--session-noise|--fan-out>
+// [--dry-run]`. The kind is a required flag rather than a default so a bare
+// `prune` never guesses at a destructive operation.
 func handlePrune(args []string, f Flags) {
 	target, err := parsePruneArgs(args)
 	if err != nil {
@@ -167,6 +167,8 @@ func handlePrune(args []string, f Flags) {
 		pruneNarration(f.DryRun, f)
 	case "session-noise":
 		pruneSessionNoise(f.DryRun, f)
+	case "fan-out":
+		pruneFanOut(f.DryRun, f)
 	}
 }
 
@@ -182,13 +184,15 @@ func parsePruneArgs(args []string) (target string, err error) {
 			targets = append(targets, "narration")
 		case "--session-noise":
 			targets = append(targets, "session-noise")
+		case "--fan-out":
+			targets = append(targets, "fan-out")
 		default:
-			return "", NewUserError("unknown prune flag %q (want --narration|--session-noise [--dry-run])", a)
+			return "", NewUserError("unknown prune flag %q (want --narration|--session-noise|--fan-out [--dry-run])", a)
 		}
 	}
 	switch len(targets) {
 	case 0:
-		return "", NewUserError("prune requires a target: --narration (deprecate stored conversational pollution) or --session-noise (drop contradiction edges between two session-local claims)")
+		return "", NewUserError("prune requires a target: --narration (deprecate stored conversational pollution), --session-noise (drop contradiction edges between two session-local claims), or --fan-out (drop supports edges above the per-claim cap)")
 	case 1:
 		return targets[0], nil
 	default:

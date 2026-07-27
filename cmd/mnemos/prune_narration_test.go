@@ -22,8 +22,10 @@ func TestParsePruneArgs(t *testing.T) {
 	}{
 		{"bare prune is an error, not a default", nil, "", true},
 		{"narration target", []string{"--narration"}, "narration", false},
+		{"fan-out target", []string{"--fan-out"}, "fan-out", false},
 		{"unknown flag rejected", []string{"--bogus"}, "", true},
 		{"unknown flag rejected even with a valid one", []string{"--narration", "--bogus"}, "", true},
+		{"two targets at once rejected", []string{"--narration", "--fan-out"}, "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
