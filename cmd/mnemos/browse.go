@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"go.klarlabs.de/mnemos/internal/domain"
@@ -17,6 +19,7 @@ const (
 type mcpListClaimsInput struct {
 	Type   string `json:"type,omitempty" jsonschema:"description=Filter by claim type: fact, hypothesis, or decision"`
 	Status string `json:"status,omitempty" jsonschema:"description=Filter by claim status: active, contested, or deprecated"`
+	RunID  string `json:"runId,omitempty" jsonschema:"description=Restrict to claims whose evidence comes from this run. Required when the caller's token carries a run allowlist."`
 	Limit  int    `json:"limit,omitempty" jsonschema:"description=Max number of claims to return (default 50, cap 200)"`
 	Offset int    `json:"offset,omitempty" jsonschema:"description=Number of claims to skip"`
 }
@@ -29,8 +32,9 @@ type mcpListClaimsOutput struct {
 }
 
 type mcpListContradictionsInput struct {
-	Limit  int `json:"limit,omitempty" jsonschema:"description=Max number of contradictions to return (default 50, cap 200)"`
-	Offset int `json:"offset,omitempty" jsonschema:"description=Number of contradictions to skip"`
+	RunID  string `json:"runId,omitempty" jsonschema:"description=Restrict to contradictions whose BOTH claims come from this run. Required when the caller's token carries a run allowlist."`
+	Limit  int    `json:"limit,omitempty" jsonschema:"description=Max number of contradictions to return (default 50, cap 200)"`
+	Offset int    `json:"offset,omitempty" jsonschema:"description=Number of contradictions to skip"`
 }
 
 type mcpContradictionPair struct {
@@ -49,6 +53,14 @@ type mcpListContradictionsOutput struct {
 	Offset         int                    `json:"offset"`
 }
 
+// The browse tools (list_beliefs / list_decisions / list_dissonances) hand back
+// raw knowledge-base rows, so they are just as run-sensitive as query_knowledge
+// — and they used to skip enforceRunScope entirely, letting a token minted for
+// one run page through the whole brain. Both entry points now run the same
+// guard as every other run-carrying tool: a run outside the allowlist is
+// denied, and an unscoped listing from a run-restricted token is denied
+// fail-closed (it would span every run). Unauthenticated stdio callers and
+// tokens without an allowlist are unaffected.
 func mcpRunListClaims(ctx context.Context, input mcpListClaimsInput) (mcpListClaimsOutput, error) {
 	limit, offset := normalizePagination(input.Limit, input.Offset)
 
@@ -58,6 +70,10 @@ func mcpRunListClaims(ctx context.Context, input mcpListClaimsInput) (mcpListCla
 	if input.Status != "" && !validClaimStatus(input.Status) {
 		return mcpListClaimsOutput{}, fmt.Errorf("invalid status %q (want active, contested, or deprecated)", input.Status)
 	}
+	runID := strings.TrimSpace(input.RunID)
+	if err := enforceRunScope(ctx, runID); err != nil {
+		return mcpListClaimsOutput{}, err
+	}
 
 	conn, err := openConn(ctx)
 	if err != nil {
@@ -65,7 +81,7 @@ func mcpRunListClaims(ctx context.Context, input mcpListClaimsInput) (mcpListCla
 	}
 	defer closeConn(conn)
 
-	claims, total, err := listClaimsFiltered(ctx, conn, input.Type, input.Status, limit, offset)
+	claims, total, err := listClaimsFiltered(ctx, conn, input.Type, input.Status, runID, limit, offset)
 	if err != nil {
 		return mcpListClaimsOutput{}, err
 	}
@@ -80,13 +96,18 @@ func mcpRunListClaims(ctx context.Context, input mcpListClaimsInput) (mcpListCla
 func mcpRunListContradictions(ctx context.Context, input mcpListContradictionsInput) (mcpListContradictionsOutput, error) {
 	limit, offset := normalizePagination(input.Limit, input.Offset)
 
+	runID := strings.TrimSpace(input.RunID)
+	if err := enforceRunScope(ctx, runID); err != nil {
+		return mcpListContradictionsOutput{}, err
+	}
+
 	conn, err := openConn(ctx)
 	if err != nil {
 		return mcpListContradictionsOutput{}, err
 	}
 	defer closeConn(conn)
 
-	pairs, total, err := listContradictionPairs(ctx, conn, limit, offset)
+	pairs, total, err := listContradictionPairs(ctx, conn, runID, limit, offset)
 	if err != nil {
 		return mcpListContradictionsOutput{}, err
 	}
@@ -98,13 +119,17 @@ func mcpRunListContradictions(ctx context.Context, input mcpListContradictionsIn
 	}, nil
 }
 
-// listClaimsFiltered loads every claim and filters/paginates in
+// listClaimsFiltered loads the candidate claims and filters/paginates in
 // memory. The CLI scale (≤ 100k claims) makes a full ListAll cheap
 // and keeps the port surface free of bespoke filter parameters.
-func listClaimsFiltered(ctx context.Context, conn *store.Conn, claimType, status string, limit, offset int) ([]domain.Claim, int, error) {
-	all, err := conn.Claims.ListAll(ctx)
+//
+// A non-empty runID narrows the candidate set to claims derived from that
+// run's events before any other filter, so a run-scoped caller can never see a
+// row belonging to another run.
+func listClaimsFiltered(ctx context.Context, conn *store.Conn, claimType, status, runID string, limit, offset int) ([]domain.Claim, int, error) {
+	all, err := listCandidateClaims(ctx, conn, runID)
 	if err != nil {
-		return nil, 0, fmt.Errorf("list claims: %w", err)
+		return nil, 0, err
 	}
 	filtered := make([]domain.Claim, 0, len(all))
 	for _, c := range all {
@@ -117,28 +142,94 @@ func listClaimsFiltered(ctx context.Context, conn *store.Conn, claimType, status
 		filtered = append(filtered, c)
 	}
 	// Sort by created_at descending for the most-recent-first browse
-	// experience. ListAll returns ascending; reverse before slicing.
-	for i, j := 0, len(filtered)-1; i < j; i, j = i+1, j-1 {
-		filtered[i], filtered[j] = filtered[j], filtered[i]
-	}
+	// experience. ListAll returns ascending, but the run-scoped path resolves
+	// claims by event id, so sort explicitly rather than relying on a reverse.
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return filtered[i].CreatedAt.After(filtered[j].CreatedAt)
+	})
 	total := len(filtered)
 	page := paginate(filtered, limit, offset)
 	return page, total, nil
 }
 
+// listCandidateClaims returns every claim (runID empty) or only the claims
+// whose evidence points at an event in runID. Claims carry no run column of
+// their own — the run lives on the source event — so the scoped path walks
+// events → claim evidence through the ports.
+func listCandidateClaims(ctx context.Context, conn *store.Conn, runID string) ([]domain.Claim, error) {
+	if runID == "" {
+		all, err := conn.Claims.ListAll(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list claims: %w", err)
+		}
+		return all, nil
+	}
+	events, err := conn.Events.ListByRunID(ctx, runID)
+	if err != nil {
+		return nil, fmt.Errorf("list events for run %q: %w", runID, err)
+	}
+	if len(events) == 0 {
+		return nil, nil
+	}
+	eventIDs := make([]string, 0, len(events))
+	for _, ev := range events {
+		eventIDs = append(eventIDs, ev.ID)
+	}
+	claims, err := conn.Claims.ListByEventIDs(ctx, eventIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list claims for run %q: %w", runID, err)
+	}
+	// ListByEventIDs can repeat a claim backed by several events in the run.
+	seen := make(map[string]struct{}, len(claims))
+	deduped := make([]domain.Claim, 0, len(claims))
+	for _, c := range claims {
+		if _, dup := seen[c.ID]; dup {
+			continue
+		}
+		seen[c.ID] = struct{}{}
+		deduped = append(deduped, c)
+	}
+	return deduped, nil
+}
+
 // listContradictionPairs assembles every contradicts edge with the
 // surrounding claim text using ports — Relationships.ListAll +
 // Claims.ListByIDs for the hop, then in-memory pagination.
-func listContradictionPairs(ctx context.Context, conn *store.Conn, limit, offset int) ([]mcpContradictionPair, int, error) {
+//
+// A non-empty runID keeps only edges whose BOTH endpoints belong to that run.
+// Requiring both is deliberate: the pair is hydrated with each claim's text,
+// so admitting an edge with one foot outside the run would hand the caller the
+// text of a claim it is not scoped to read.
+func listContradictionPairs(ctx context.Context, conn *store.Conn, runID string, limit, offset int) ([]mcpContradictionPair, int, error) {
 	allRels, err := conn.Relationships.ListAll(ctx)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list relationships: %w", err)
 	}
+	var runClaims map[string]struct{}
+	if runID != "" {
+		scoped, err := listCandidateClaims(ctx, conn, runID)
+		if err != nil {
+			return nil, 0, err
+		}
+		runClaims = make(map[string]struct{}, len(scoped))
+		for _, c := range scoped {
+			runClaims[c.ID] = struct{}{}
+		}
+	}
 	contradictions := make([]domain.Relationship, 0)
 	for _, r := range allRels {
-		if string(r.Type) == "contradicts" {
-			contradictions = append(contradictions, r)
+		if string(r.Type) != "contradicts" {
+			continue
 		}
+		if runClaims != nil {
+			if _, ok := runClaims[r.FromClaimID]; !ok {
+				continue
+			}
+			if _, ok := runClaims[r.ToClaimID]; !ok {
+				continue
+			}
+		}
+		contradictions = append(contradictions, r)
 	}
 	// most-recent-first
 	for i, j := 0, len(contradictions)-1; i < j; i, j = i+1, j-1 {
