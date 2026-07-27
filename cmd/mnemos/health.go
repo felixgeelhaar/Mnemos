@@ -84,6 +84,9 @@ func probeDB(ctx context.Context, db *sql.DB) healthCheck {
 // success means env vars decode cleanly and the client picked a
 // transport; the first real call still has to validate end-to-end.
 //
+// The one exception is Ollama, where the model inventory is local and
+// free to read — see checkOllamaModel.
+//
 // "skipped" means no provider env var is set AND no Ollama is
 // running — the operator hasn't asked for LLM features. "failed"
 // means a provider was requested but the config or client construction
@@ -99,7 +102,7 @@ func probeLLM(_ context.Context) healthCheck {
 	if _, err := llm.NewClient(cfg); err != nil {
 		return healthCheck{Name: "llm", Status: "failed", Detail: err.Error()}
 	}
-	return healthCheck{Name: "llm", Status: "ok", Detail: fmt.Sprintf("provider=%s model=%s", cfg.Provider, cfg.Model)}
+	return checkOllamaModel("llm", cfg.Provider, cfg.Model, cfg.BaseURL)
 }
 
 // probeEmbedding mirrors probeLLM for the embedding provider.
@@ -115,7 +118,47 @@ func probeEmbedding(_ context.Context) healthCheck {
 	if _, err := embedding.NewClient(cfg); err != nil {
 		return healthCheck{Name: "embedding", Status: "failed", Detail: err.Error()}
 	}
-	return healthCheck{Name: "embedding", Status: "ok", Detail: fmt.Sprintf("provider=%s model=%s", cfg.Provider, cfg.Model)}
+	return checkOllamaModel("embedding", cfg.Provider, cfg.Model, cfg.BaseURL)
+}
+
+// checkOllamaModel turns a constructed provider config into the final health
+// result, verifying for Ollama that the configured model is actually installed.
+//
+// A reachable daemon is not evidence the model is there. Ollama answers a
+// request for a missing model with a 404 per call, so the pipeline keeps
+// running while every extraction fails — a degradation that is invisible
+// precisely because the process stays healthy. Observed in production: the
+// models had been removed, doctor reported "llm ok" from construction alone,
+// and capture ran rule-based for days with nothing surfacing it.
+//
+// This stays within the no-paid-calls rule that governs the probes above:
+// listing installed models is local and free, so it is checked; inference is
+// not. Remote providers are returned untouched.
+//
+// An unreadable inventory is "warn", never "failed": not being able to ask is
+// not the same as knowing the model is gone.
+func checkOllamaModel(name string, provider llm.Provider, model, baseURL string) healthCheck {
+	detail := fmt.Sprintf("provider=%s model=%s", provider, model)
+	if provider != llm.ProviderOllama || strings.TrimSpace(model) == "" {
+		return healthCheck{Name: name, Status: "ok", Detail: detail}
+	}
+
+	present, err := llm.OllamaModelPresent(baseURL, model)
+	switch {
+	case err != nil:
+		return healthCheck{
+			Name:   name,
+			Status: "warn",
+			Detail: fmt.Sprintf("%s — could not verify the model is installed: %v", detail, err),
+		}
+	case !present:
+		return healthCheck{
+			Name:   name,
+			Status: "failed",
+			Detail: fmt.Sprintf("%s is not installed; every call will fail with 404 — run: ollama pull %s", detail, model),
+		}
+	}
+	return healthCheck{Name: name, Status: "ok", Detail: detail}
 }
 
 func llmExplicitlyConfigured() bool {
