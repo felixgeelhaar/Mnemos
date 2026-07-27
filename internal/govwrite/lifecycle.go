@@ -197,11 +197,22 @@ func (e *PartialDeleteError) Is(target error) bool {
 //  2. Deprecate it, with [TombstoneReason] on the status_history row. This is
 //     the invariant the whole function exists for: from here on, whatever
 //     fails, no ACTIVE un-evidenced claim can survive.
-//  3. Strip the dependents (relationships, then the claim embedding).
+//  3. Strip the dependents (relationships, the claim embedding, then the
+//     entity links).
 //  4. Delete the claim row (which cascades claim_evidence + status_history).
 //
 // Returns removed=false with a [PartialDeleteError] when step 4 fails: the
 // tombstone stands, the partial state is named, and a retry resumes.
+//
+// The entity unlink in step 3 is not optional bookkeeping. claim_entities has
+// a foreign key to claims on every FK-enforcing backend and belongs to the
+// entity aggregate, so ClaimRepository.DeleteCascade does not own it and
+// cannot remove it. Without the unlink, step 4 aborted on the constraint —
+// and because the tombstone and the strips had already committed, `forget` on
+// any claim that mentioned an entity left a deprecated, evidence-stripped row
+// and returned a PartialDeleteError. Extraction links entities for every claim
+// it emits, so that was the common case, not an edge one. Semantic dedupe hit
+// the identical constraint from the other direction and was fixed there first.
 func cascadeDeleteClaim(ctx context.Context, conn *store.Conn, claimID string) (removed bool, err error) {
 	existing, err := conn.Claims.ListByIDs(ctx, []string{claimID})
 	if err != nil {
@@ -220,6 +231,10 @@ func cascadeDeleteClaim(ctx context.Context, conn *store.Conn, claimID string) (
 	}
 	if err := conn.Embeddings.Delete(ctx, claimID, "claim"); err != nil {
 		return false, fmt.Errorf("delete embedding for %s: %w", claimID, err)
+	}
+	// Idempotent: unlinking nothing is success, so a resumed pass converges.
+	if err := conn.Entities.UnlinkClaim(ctx, claimID); err != nil {
+		return false, &PartialDeleteError{ClaimID: claimID, Tombstoned: true, Err: fmt.Errorf("unlink entities: %w", err)}
 	}
 	if err := conn.Claims.DeleteCascade(ctx, claimID); err != nil {
 		return false, &PartialDeleteError{ClaimID: claimID, Tombstoned: true, Err: err}
