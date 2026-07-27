@@ -252,6 +252,12 @@ func (e Engine) AnswerWithOptions(ctx context.Context, question string, opts Ans
 	// bound the work, and a whole-corpus corrective scan ran for as long as it
 	// liked. Third instance of that pattern in this codebase, after extraction
 	// and the job runner.
+	//
+	// The question is embedded once for the whole recall (see query_vector.go):
+	// the dense fast-path, the corpus event ranker, the claim re-ranker and any
+	// corrective pass all share one vector instead of each buying their own
+	// round-trip to the embedding provider.
+	ctx = withQueryVectorMemo(ctx)
 	ans, err := e.resolveAnswer(ctx, question, opts)
 	if err != nil {
 		return domain.Answer{}, err
@@ -552,11 +558,11 @@ func (e Engine) eventsByHybrid(ctx context.Context, question string) ([]domain.E
 	if e.eventVectorSearch == nil || e.embedClient == nil {
 		return nil, false
 	}
-	qVectors, err := e.embedClient.Embed(ctx, []string{question})
-	if err != nil || len(qVectors) == 0 {
+	qVec, err := e.questionVector(ctx, question)
+	if err != nil {
 		return nil, false
 	}
-	hits, err := e.eventVectorSearch.SearchEventsByVector(ctx, qVectors[0], embedding.ModelIDOf(e.embedClient), eventVectorTopK, 0)
+	hits, err := e.eventVectorSearch.SearchEventsByVector(ctx, qVec, embedding.ModelIDOf(e.embedClient), eventVectorTopK, 0)
 	if err != nil || len(hits) == 0 {
 		return nil, false
 	}
@@ -640,6 +646,8 @@ func (e Engine) AnswerForRunWithOptions(ctx context.Context, question, runID str
 	if strings.TrimSpace(runID) == "" {
 		return domain.Answer{}, fmt.Errorf("run id is required")
 	}
+	// One question embedding for the whole recall — see AnswerWithOptions.
+	ctx = withQueryVectorMemo(ctx)
 	events, err := e.events.ListByRunID(ctx, runID)
 	if err != nil {
 		return domain.Answer{}, fmt.Errorf("load events for run: %w", err)
@@ -1446,11 +1454,10 @@ func (e Engine) cosineEventScores(ctx context.Context, question string, events [
 	if !hasAny {
 		return nil
 	}
-	qVectors, err := e.embedClient.Embed(ctx, []string{question})
-	if err != nil || len(qVectors) == 0 {
+	qVec, err := e.questionVector(ctx, question)
+	if err != nil {
 		return nil
 	}
-	qVec := qVectors[0]
 	out := make(map[string]float64, len(events))
 	for _, ev := range events {
 		vec, ok := vecByID[ev.ID]
@@ -1596,11 +1603,10 @@ func (e Engine) cosineClaimScores(ctx context.Context, question string, claims [
 	if !hasAny {
 		return nil
 	}
-	qVectors, err := e.embedClient.Embed(ctx, []string{question})
-	if err != nil || len(qVectors) == 0 {
+	qVec, err := e.questionVector(ctx, question)
+	if err != nil {
 		return nil
 	}
-	qVec := qVectors[0]
 	out := make(map[string]float64, len(claims))
 	for _, cl := range claims {
 		vec, ok := vecByID[cl.ID]
@@ -1653,13 +1659,13 @@ func (e Engine) claimScoresByCandidate(ctx context.Context, question string, cla
 	for _, cl := range claims {
 		candidates[cl.ID] = struct{}{}
 	}
-	qVectors, err := e.embedClient.Embed(ctx, []string{question})
-	if err != nil || len(qVectors) == 0 {
+	qVec, err := e.questionVector(ctx, question)
+	if err != nil {
 		return nil, false
 	}
 	hits, err := e.claimVectorSearch.SearchClaimsByVector(
 		ctx,
-		qVectors[0],
+		qVec,
 		candidates,
 		embedding.ModelIDOf(e.embedClient),
 		0, // topK 0 = no truncation; the caller ranks the full candidate set
