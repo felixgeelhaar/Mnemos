@@ -240,6 +240,14 @@ func (m *memory) AnalogousClaims(ctx context.Context, claimID string, limit int)
 // AnalogousClaimsBounded is [Memory.AnalogousClaims] reporting the bounds it
 // applied (see [BoundedCognition]).
 func (m *memory) AnalogousClaimsBounded(ctx context.Context, claimID string, limit int) (AnalogyReport, error) {
+	return m.analogousWithin(ctx, claimID, limit, AnalogNodeBudget)
+}
+
+// analogousWithin is AnalogousClaimsBounded with an explicit node budget. The
+// seam exists so the budget-exhaustion path is testable: reaching the shipped
+// [AnalogNodeBudget] would need a graph of a few hundred thousand claims, and an
+// untested bound is a bound that quietly stops holding.
+func (m *memory) analogousWithin(ctx context.Context, claimID string, limit, nodeBudget int) (AnalogyReport, error) {
 	var bounds Bounds
 	limit = capLimit(&bounds, limit, AnalogDefaultLimit, MaxCognitiveResults)
 
@@ -284,7 +292,7 @@ func (m *memory) AnalogousClaimsBounded(ctx context.Context, claimID string, lim
 	}
 	var out []scored
 	done := map[string]struct{}{} // one representative per neighbourhood
-	budget := AnalogNodeBudget
+	budget := nodeBudget
 	for _, cand := range candidates {
 		if _, seen := done[cand]; seen {
 			continue

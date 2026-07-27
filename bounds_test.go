@@ -694,3 +694,48 @@ func TestBoundedCognition_EveryReadReportsBounds(t *testing.T) {
 		t.Errorf("AnalogousClaimsBounded: %v", err)
 	}
 }
+
+// TestAnalogousClaims_NodeBudgetBoundsTheWalk exercises the work bound itself
+// through the analogousWithin seam. Reaching the shipped AnalogNodeBudget would
+// need a few hundred thousand claims; the behaviour under exhaustion is the same
+// either way — stop walking, say so, and still rank what was scored.
+func TestAnalogousClaims_NodeBudgetBoundsTheWalk(t *testing.T) {
+	m := boundsMem(t, "analog_budget")
+	analogCorpus(t, m, 40) // 40 chains × 5 claims
+
+	// A budget of 12 node visits covers only the first two or three
+	// neighbourhoods (each 2-hop walk visits ~5 nodes).
+	rep, err := m.analogousWithin(context.Background(), "n0000-2", 50, 12)
+	if err != nil {
+		t.Fatalf("analogousWithin: %v", err)
+	}
+	if rep.Bounds.Considered >= rep.Bounds.Scanned {
+		t.Fatalf("Considered = %d of Scanned = %d: the node budget did not bite",
+			rep.Bounds.Considered, rep.Bounds.Scanned)
+	}
+	assertTruncationVisible(t, rep.Bounds, BoundReasonWorkBudget, len(rep.Analogous))
+
+	// What it did score is still ranked best-first, not left in walk order.
+	for i := 1; i < len(rep.Analogous); i++ {
+		if rep.Analogous[i-1].Similarity < rep.Analogous[i].Similarity {
+			t.Fatalf("budget-truncated analogues are not ranked best-first: %v", rep.Analogous)
+		}
+	}
+
+	// The full budget sees the whole graph and reports no work-budget cut.
+	full, err := m.analogousWithin(context.Background(), "n0000-2", 50, AnalogNodeBudget)
+	if err != nil {
+		t.Fatalf("analogousWithin (full): %v", err)
+	}
+	if hasReason(full.Bounds, BoundReasonWorkBudget) {
+		t.Errorf("full budget reported a work-budget cut: %+v", full.Bounds)
+	}
+	if full.Bounds.Considered != full.Bounds.Scanned {
+		t.Errorf("Considered = %d, Scanned = %d: an unexhausted budget must cover every candidate",
+			full.Bounds.Considered, full.Bounds.Scanned)
+	}
+	if len(full.Analogous) <= len(rep.Analogous) {
+		t.Errorf("full budget found %d analogues, budget-12 found %d — the budget was not actually limiting",
+			len(full.Analogous), len(rep.Analogous))
+	}
+}
