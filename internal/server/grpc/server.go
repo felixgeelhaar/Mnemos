@@ -16,6 +16,7 @@ import (
 	"go.klarlabs.de/mnemos/internal/auth"
 	"go.klarlabs.de/mnemos/internal/domain"
 	"go.klarlabs.de/mnemos/internal/govwrite"
+	"go.klarlabs.de/mnemos/internal/runscope"
 	"go.klarlabs.de/mnemos/internal/store"
 	mnemosv1 "go.klarlabs.de/mnemos/proto/gen/mnemos/v1"
 
@@ -748,8 +749,30 @@ func (s *Server) AppendBeliefs(ctx context.Context, req *mnemosv1.AppendBeliefsR
 		})
 	}
 
+	// F.4.b: a run-scoped bearer may only attach evidence from runs it is
+	// allowed to see. Checked BEFORE any write so a rejection cannot leave
+	// orphan claims behind.
+	//
+	// This returned Unimplemented — fail-closed and honest, but it meant REST
+	// enforced a boundary gRPC could not, so the same token behaved differently
+	// depending on the transport. The check now lives in internal/runscope and
+	// both call the one implementation; a security check with two copies
+	// eventually has two behaviours.
 	if allowed := allowedRunsFromContext(ctx); len(allowed) > 0 && len(req.Evidence) > 0 {
-		return nil, status.Errorf(codes.Unimplemented, "run-scoped evidence validation not yet implemented for gRPC")
+		eventIDs := make([]string, 0, len(req.Evidence))
+		for _, e := range req.Evidence {
+			eventIDs = append(eventIDs, e.EpisodeId)
+		}
+
+		bad, badRun, err := runscope.CheckEventRunsAllowed(ctx, s.connFor(ctx), eventIDs, allowed)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "run-scope check: %v", err)
+		}
+
+		if bad != "" {
+			return nil, status.Errorf(codes.PermissionDenied,
+				"evidence episode %q (run %q) not in token whitelist", bad, badRun)
+		}
 	}
 
 	// Same attribution as the REST and CLI write paths; the zero value left
