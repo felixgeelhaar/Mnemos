@@ -16,6 +16,13 @@
 // FTS5, sqlite-vss) are intentionally absent — callers that need
 // those should open a sqlite:// DSN.
 //
+// Drop-in parity includes FIELD parity, not just method parity: the
+// stored* records in records.go must carry every field of the domain
+// type they persist. Dropping one is worse than a missing method,
+// because the read path returns a plausible zero value instead of an
+// error — see TestStoredClaim_RoundTripsEveryField, which reflects over
+// domain.Claim and fails when a new field is added without a slot.
+//
 // See docs/adr/0001-multi-backend-storage.md for the contract.
 package memory
 

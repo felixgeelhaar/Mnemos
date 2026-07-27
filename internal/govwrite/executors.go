@@ -611,7 +611,142 @@ func (e pruneRelationshipsExecutor) Execute(ctx context.Context, input any, _ ax
 
 // PruneRelationships replaces the stored relationship set with keep, dropping
 // everything else. dropped is recorded on the evidence row for the audit trail.
+//
+// Deprecated for snapshot-based pruners: "everything not in keep" is a
+// predicate evaluated against the CALLER's snapshot, so any edge a concurrent
+// writer inserts between the caller's read and this write is silently deleted
+// as collateral. Use [Writer.DropRelationships], which enumerates the edges to
+// remove instead of the edges to retain. Kept for callers that genuinely mean
+// "replace the whole set".
 func (w *Writer) PruneRelationships(ctx context.Context, keep []domain.Relationship, dropped int) (int, error) {
 	out, err := dispatch[writeCount](ctx, w, actionPruneRelationships, pruneRelationshipsInput{Keep: keep, Dropped: dropped})
+	return out.Accepted, err
+}
+
+// --- Relationship dropping (enumerated, snapshot-safe) ---
+
+type dropRelationshipsInput struct{ Drop []domain.Relationship }
+
+type dropRelationshipsExecutor struct{ conn *store.Conn }
+
+// edgeKey identifies a relationship by its CONTENT — the tuple the storage
+// layer treats as unique — rather than by its row id, which differs between two
+// detections of the same edge.
+func edgeKey(r domain.Relationship) [3]string {
+	return [3]string{string(r.Type), r.FromClaimID, r.ToClaimID}
+}
+
+// Execute removes exactly the enumerated edges and leaves everything else,
+// including edges that did not exist when the caller took its snapshot.
+//
+// Two separate things make that true, and both are needed:
+//
+//  1. The predicate is an enumeration, not a complement. A pruner reads the
+//     relationship set, spends however long it takes to re-derive each edge
+//     against the current detectors, and only then writes. Expressed as "keep
+//     this set", the write deletes every edge a concurrent `relate` or capture
+//     inserted meanwhile: the snapshot predates them, so they fall outside keep
+//     and are destroyed as "stale" without ever having been evaluated.
+//     Expressed as "drop these edges", they cannot be — an edge absent from the
+//     snapshot is absent from the drop list.
+//
+//  2. The delete is scoped to the claims the drop list actually touches, and
+//     each one's surviving edges are re-read at write time. The repository has
+//     no delete-this-edge primitive, only DeleteAll and DeleteByClaim, and
+//     DeleteAll+restore reopens the whole race at the storage layer: everything
+//     a writer commits between the clear and the restore is lost regardless of
+//     how careful the predicate was. Working per affected claim shrinks the
+//     exposure from "the entire table" to "edges on this one claim, during one
+//     delete+restore" — and leaves edges on untouched claims, which is what a
+//     concurrent capture run is writing, provably alone.
+//
+// Cost is one list + one delete + one upsert per affected claim rather than a
+// single table sweep. A prune is a rare maintenance pass; paying for it there
+// is cheaper than losing edges. An exact per-edge delete in the repository
+// would remove the residual window entirely.
+func (e dropRelationshipsExecutor) Execute(ctx context.Context, input any, _ axidomain.CapabilityInvoker) (axidomain.ExecutionResult, []axidomain.EvidenceRecord, error) {
+	in, ok := payload[dropRelationshipsInput](input)
+	if !ok {
+		return axidomain.ExecutionResult{}, nil, fmt.Errorf("drop_relationships: unexpected input %T", input)
+	}
+	if len(in.Drop) == 0 {
+		return axidomain.ExecutionResult{
+			Data:    writeCount{Accepted: 0},
+			Summary: "dropped 0 relationship(s)",
+		}, ev("mnemos.write.relationships.drop", map[string]any{"dropped": 0, "retained": 0}), nil
+	}
+
+	doomed := make(map[[3]string]struct{}, len(in.Drop))
+	affected := make([]string, 0, len(in.Drop))
+	seen := make(map[string]struct{}, len(in.Drop))
+	for _, r := range in.Drop {
+		doomed[edgeKey(r)] = struct{}{}
+		// The source endpoint alone is enough: DeleteByClaim matches an edge on
+		// either endpoint, so every doomed edge is reachable from its own
+		// FromClaimID. Visiting the target too would only widen the blast radius.
+		if _, dup := seen[r.FromClaimID]; !dup {
+			seen[r.FromClaimID] = struct{}{}
+			affected = append(affected, r.FromClaimID)
+		}
+	}
+
+	dropped := 0
+	retainedEdges := map[[3]string]struct{}{}
+	for _, claimID := range affected {
+		// Read at WRITE time, per claim: the restore then carries whatever
+		// landed on this claim during the pruner's scan.
+		edges, err := e.conn.Relationships.ListByClaim(ctx, claimID)
+		if err != nil {
+			return axidomain.ExecutionResult{}, nil, fmt.Errorf("read relationships for %s: %w", claimID, err)
+		}
+		keep := make([]domain.Relationship, 0, len(edges))
+		for _, r := range edges {
+			if _, kill := doomed[edgeKey(r)]; kill {
+				continue
+			}
+			keep = append(keep, r)
+		}
+		for _, r := range keep {
+			retainedEdges[edgeKey(r)] = struct{}{}
+		}
+		if len(keep) == len(edges) {
+			// Nothing doomed left on this claim — a resumed run, or another
+			// pruner got there first. Do not touch it.
+			continue
+		}
+		if err := e.conn.Relationships.DeleteByClaim(ctx, claimID); err != nil {
+			return axidomain.ExecutionResult{}, nil, fmt.Errorf("delete relationships for %s: %w", claimID, err)
+		}
+		if len(keep) > 0 {
+			if err := e.conn.Relationships.Upsert(ctx, keep); err != nil {
+				// This claim's edges are gone and the restore failed. Say so
+				// loudly, naming the claim, so the damage is bounded and locatable.
+				return axidomain.ExecutionResult{}, nil, fmt.Errorf(
+					"restore surviving relationships for claim %s (its edges are now MISSING): %w", claimID, err)
+			}
+		}
+		dropped += len(edges) - len(keep)
+	}
+	retained := len(retainedEdges)
+
+	return axidomain.ExecutionResult{
+			Data:    writeCount{Accepted: retained},
+			Summary: fmt.Sprintf("dropped %d relationship(s) across %d claim(s), retained %d", dropped, len(affected), retained),
+		}, ev("mnemos.write.relationships.drop", map[string]any{
+			"dropped": dropped, "retained": retained, "claims_touched": len(affected),
+		}), nil
+}
+
+// DropRelationships removes exactly the enumerated edges, matched on content
+// (type + endpoints), and retains everything else — including edges written
+// after the caller built its list. Returns the number of edges retained across
+// the claims it touched.
+//
+// This is the snapshot-safe counterpart to [Writer.PruneRelationships]: a
+// pruner that decides from a stale read can delete only what it actually saw
+// and judged, never a concurrent writer's new edge. Edges on claims the drop
+// list does not name are never read, deleted, or rewritten.
+func (w *Writer) DropRelationships(ctx context.Context, drop []domain.Relationship) (int, error) {
+	out, err := dispatch[writeCount](ctx, w, actionDropRelationships, dropRelationshipsInput{Drop: drop})
 	return out.Accepted, err
 }

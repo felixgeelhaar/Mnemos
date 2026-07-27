@@ -115,12 +115,26 @@ block, err := c.Context(ctx, "chat-session-1", client.ContextOptions{})
 | `WithToken / WithHTTPClient / WithTimeout / WithRetry / WithLogger` | options |
 | `c.Health(ctx)` | `GET /health` |
 | `c.Metrics(ctx)` | `GET /v1/metrics` |
-| `c.Events()` builder | `/v1/events` |
-| `c.Claims()` builder | `/v1/claims` |
-| `c.Relationships()` builder | `/v1/relationships` |
+| `c.Events()` builder | `/v1/episodes` |
+| `c.Claims()` builder | `/v1/beliefs` |
+| `c.Relationships()` builder | `/v1/associations` |
 | `c.Embeddings()` builder | `/v1/embeddings` |
 | `c.Search(ctx, query, opts)` | `GET /v1/search` |
 | `c.Context(ctx, runID, opts)` | `GET /v1/context` |
+| `c.Process(ctx, req)` | `POST /v1/process` |
+| `c.Recall(ctx, query, opts)` | `GET /v1/recall` |
+| `c.GetClaim` / `SetClaimLifecycle` / `Classify` | `/v1/beliefs/{id}`, `/v1/beliefs/{id}/lifecycle`, `/v1/classify` |
+| `c.ListDecisions` / `c.GetDecision` | `/v1/decisions`, `/v1/decisions/{id}` |
+| `c.WhoKnows` / `KnowledgeGaps` / `Calibration` / `Hypercorrections` / `Recombinations` | the matching `/v1/*` connected-brain reads |
+| `c.Blocks` / `SetBlock` / `AppendBlock` | `/v1/blocks` |
+| `c.AnalogousClaims(ctx, claimID, …)` | `GET /v1/beliefs/{id}/analogous` |
+| `c.SetExpectation` / `RecordObservation` / `Expectation` | `/v1/beliefs/{id}/expectation`, `/v1/beliefs/{id}/observation` |
+| `c.RecordAction` / `RecordActionOutcome` / `Synthesize` | `/v1/actions`, `/v1/actions/{id}/outcome`, `/v1/synthesize` |
+| `c.Timeline` / `c.Signals` | `/v1/timeline`, `/v1/signals` |
+
+The Go method names still say `Events` / `Claims` / `Relationships`; the paths
+they hit were renamed to the brain vocabulary in v0.85.0. Pass a token with
+`client.WithToken(...)` for **every** call — reads included.
 
 Source: [go.klarlabs.de/mnemos/tree/main/client](https://github.com/klarlabs-studio/mnemos/tree/main/client).
 

@@ -103,7 +103,7 @@ FROM entities WHERE normalized_name = ? LIMIT 1`, norm)
 // ListClaimsForEntity returns the claims linked to the entity.
 func (r EntityRepository) ListClaimsForEntity(ctx context.Context, entityID string) ([]domain.Claim, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT c.id, c.text, c.type, c.confidence, c.status, c.created_at, c.created_by, c.trust_score, c.valid_from, c.valid_to, c.subject_class, c.confidence_components
+SELECT `+claimColumns("c")+`
 FROM claims c
 JOIN claim_entities ce ON ce.claim_id = c.id
 WHERE ce.entity_id = ?

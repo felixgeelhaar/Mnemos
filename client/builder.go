@@ -12,11 +12,19 @@ import (
 // builder so calls chain; terminal verbs (List, Append) take a context
 // and return the typed result.
 //
+// The accessor names predate v0.85.0, which renamed the wire resources to the
+// brain vocabulary (ADR 0011): Events hits /v1/episodes, Claims hits
+// /v1/beliefs and Relationships hits /v1/associations. Every one of those
+// endpoints requires a bearer token — reads included — unless the server was
+// started with --public-reads; supply it with client.WithToken.
+//
 // Builders are short-lived and not safe for concurrent use across
 // goroutines — construct a fresh one per request via the resource
 // accessor.
 
-// EventsBuilder is a fluent builder for the /v1/events endpoint.
+// EventsBuilder is a fluent builder for the /v1/episodes endpoint.
+// (The Go type keeps the pre-v0.85.0 "Events" name; the wire resource is
+// episodes.)
 type EventsBuilder struct {
 	c      *Client
 	limit  int
@@ -31,14 +39,14 @@ func (b *EventsBuilder) Limit(n int) *EventsBuilder { b.limit = n; return b }
 // Offset sets the pagination offset.
 func (b *EventsBuilder) Offset(n int) *EventsBuilder { b.offset = n; return b }
 
-// RunID scopes the listing to events emitted under a single run_id — the
-// server filters via ListByRunID rather than returning every event, so a
+// RunID scopes the listing to episodes emitted under a single run_id — the
+// server filters via ListByRunID rather than returning every episode, so a
 // consumer that partitions memory by run (a per-tenant, per-session, or
 // per-subject boundary) no longer has to page the whole store and filter
 // client-side. Empty string clears the filter. Token whitelists still apply.
 func (b *EventsBuilder) RunID(id string) *EventsBuilder { b.runID = id; return b }
 
-// List hits GET /v1/events with the configured filters.
+// List hits GET /v1/episodes with the configured filters.
 func (b *EventsBuilder) List(ctx context.Context) (*ListEventsResponse, error) {
 	var out ListEventsResponse
 	q := url.Values{}
@@ -52,8 +60,9 @@ func (b *EventsBuilder) List(ctx context.Context) (*ListEventsResponse, error) {
 	return &out, nil
 }
 
-// Append hits POST /v1/events. Idempotent — events with IDs already in
-// the registry are no-ops.
+// Append hits POST /v1/episodes, sending the batch under the "episodes"
+// wrapper key. Idempotent — episodes with IDs already in the registry are
+// no-ops.
 func (b *EventsBuilder) Append(ctx context.Context, events []Event) (*AppendResponse, error) {
 	body := struct {
 		Events []Event `json:"episodes"`
@@ -65,7 +74,9 @@ func (b *EventsBuilder) Append(ctx context.Context, events []Event) (*AppendResp
 	return &out, nil
 }
 
-// ClaimsBuilder is a fluent builder for the /v1/claims endpoint.
+// ClaimsBuilder is a fluent builder for the /v1/beliefs endpoint.
+// (The Go type keeps the pre-v0.85.0 "Claims" name; the wire resource is
+// beliefs.)
 type ClaimsBuilder struct {
 	c           *Client
 	limit       int
@@ -89,17 +100,18 @@ func (b *ClaimsBuilder) Type(t string) *ClaimsBuilder { b.claimType = t; return 
 // or deprecated. Empty string clears the filter.
 func (b *ClaimsBuilder) Status(s string) *ClaimsBuilder { b.claimStatus = s; return b }
 
-// RunID scopes the listing to claims whose evidence points at events emitted
+// RunID scopes the listing to beliefs whose evidence points at episodes emitted
 // under a single run_id — the tenant boundary. The server resolves run_id →
-// events → claim evidence, so a consumer partitioning memory by run gets only
-// that partition's claims without paging every claim and mapping evidence
-// client-side. An empty allowed-event set (no events for the run) returns no
-// claims rather than leaking the unfiltered set. Empty string clears the filter.
+// episodes → belief evidence, so a consumer partitioning memory by run gets
+// only that partition's beliefs without paging every belief and mapping
+// evidence client-side. An empty allowed-episode set (no episodes for the run)
+// returns no beliefs rather than leaking the unfiltered set. Empty string
+// clears the filter.
 func (b *ClaimsBuilder) RunID(id string) *ClaimsBuilder { b.runID = id; return b }
 
-// List hits GET /v1/claims with the configured filters. Evidence links
-// for the returned claims are included in the response so the local
-// query engine can resolve them back to events.
+// List hits GET /v1/beliefs with the configured filters. Evidence links
+// for the returned beliefs are included in the response so the local
+// query engine can resolve them back to episodes.
 func (b *ClaimsBuilder) List(ctx context.Context) (*ListClaimsResponse, error) {
 	var out ListClaimsResponse
 	q := url.Values{}
@@ -119,9 +131,9 @@ func (b *ClaimsBuilder) List(ctx context.Context) (*ListClaimsResponse, error) {
 	return &out, nil
 }
 
-// Append hits POST /v1/claims. Pass evidence to insert the claim →
-// event link rows in the same request; the referenced events must
-// already exist on the server.
+// Append hits POST /v1/beliefs, sending the batch under the "beliefs" wrapper
+// key. Pass evidence to insert the belief → episode link rows in the same
+// request; the referenced episodes must already exist on the server.
 func (b *ClaimsBuilder) Append(ctx context.Context, claims []Claim, evidence []EvidenceLink) (*AppendResponse, error) {
 	body := AppendClaimsBody{Claims: claims, Evidence: evidence}
 	var out AppendResponse
@@ -131,7 +143,9 @@ func (b *ClaimsBuilder) Append(ctx context.Context, claims []Claim, evidence []E
 	return &out, nil
 }
 
-// RelationshipsBuilder is a fluent builder for the /v1/relationships endpoint.
+// RelationshipsBuilder is a fluent builder for the /v1/associations endpoint.
+// (The Go type keeps the pre-v0.85.0 "Relationships" name; the wire resource
+// is associations.)
 type RelationshipsBuilder struct {
 	c       *Client
 	limit   int
@@ -149,7 +163,7 @@ func (b *RelationshipsBuilder) Offset(n int) *RelationshipsBuilder { b.offset = 
 // string clears the filter.
 func (b *RelationshipsBuilder) Type(t string) *RelationshipsBuilder { b.relType = t; return b }
 
-// List hits GET /v1/relationships with the configured filters.
+// List hits GET /v1/associations with the configured filters.
 func (b *RelationshipsBuilder) List(ctx context.Context) (*ListRelationshipsResponse, error) {
 	var out ListRelationshipsResponse
 	q := url.Values{}
@@ -163,8 +177,9 @@ func (b *RelationshipsBuilder) List(ctx context.Context) (*ListRelationshipsResp
 	return &out, nil
 }
 
-// Append hits POST /v1/relationships. The referenced from/to claims
-// must already exist on the server.
+// Append hits POST /v1/associations, sending the batch under the
+// "associations" wrapper key. The referenced from/to beliefs must already
+// exist on the server.
 func (b *RelationshipsBuilder) Append(ctx context.Context, rels []Relationship) (*AppendResponse, error) {
 	body := struct {
 		Relationships []Relationship `json:"associations"`

@@ -50,6 +50,9 @@ func (s *Server) ListActions(ctx context.Context, req *mnemosv1.ListActionsReque
 
 // AppendActions writes operational actions idempotently.
 func (s *Server) AppendActions(ctx context.Context, req *mnemosv1.AppendActionsRequest) (*mnemosv1.AppendResponse, error) {
+	if err := s.requireScope(ctx, domain.ScopeClaimsWrite); err != nil {
+		return nil, err
+	}
 	if len(req.Actions) == 0 {
 		return nil, status.Errorf(codes.InvalidArgument, "actions array is empty")
 	}
@@ -114,6 +117,9 @@ func (s *Server) ListOutcomes(ctx context.Context, req *mnemosv1.ListOutcomesReq
 // NOT auto-fire action_of/outcome_of edges; that wiring lives in the
 // CLI/MCP layer for now.
 func (s *Server) AppendOutcomes(ctx context.Context, req *mnemosv1.AppendOutcomesRequest) (*mnemosv1.AppendResponse, error) {
+	if err := s.requireScope(ctx, domain.ScopeClaimsWrite); err != nil {
+		return nil, err
+	}
 	if len(req.Outcomes) == 0 {
 		return nil, status.Errorf(codes.InvalidArgument, "outcomes array is empty")
 	}
@@ -183,6 +189,9 @@ func (s *Server) ListSchemas(ctx context.Context, req *mnemosv1.ListSchemasReque
 
 // AppendSchemas writes schemas idempotently.
 func (s *Server) AppendSchemas(ctx context.Context, req *mnemosv1.AppendSchemasRequest) (*mnemosv1.AppendResponse, error) {
+	if err := s.requireScope(ctx, domain.ScopeClaimsWrite); err != nil {
+		return nil, err
+	}
 	if len(req.Schemas) == 0 {
 		return nil, status.Errorf(codes.InvalidArgument, "schemas array is empty")
 	}
@@ -248,6 +257,9 @@ func (s *Server) ListDecisions(ctx context.Context, req *mnemosv1.ListDecisionsR
 
 // AppendDecisions writes decisions idempotently.
 func (s *Server) AppendDecisions(ctx context.Context, req *mnemosv1.AppendDecisionsRequest) (*mnemosv1.AppendResponse, error) {
+	if err := s.requireScope(ctx, domain.ScopeClaimsWrite); err != nil {
+		return nil, err
+	}
 	if len(req.Decisions) == 0 {
 		return nil, status.Errorf(codes.InvalidArgument, "decisions array is empty")
 	}
@@ -316,6 +328,9 @@ func (s *Server) ListReflexes(ctx context.Context, req *mnemosv1.ListReflexesReq
 
 // AppendReflexes writes reflexes idempotently.
 func (s *Server) AppendReflexes(ctx context.Context, req *mnemosv1.AppendReflexesRequest) (*mnemosv1.AppendResponse, error) {
+	if err := s.requireScope(ctx, domain.ScopeClaimsWrite); err != nil {
+		return nil, err
+	}
 	if len(req.Reflexes) == 0 {
 		return nil, status.Errorf(codes.InvalidArgument, "reflexes array is empty")
 	}
@@ -393,6 +408,12 @@ func (s *Server) ListEntityAssociations(ctx context.Context, req *mnemosv1.ListE
 
 // AppendEntityAssociations writes polymorphic edges idempotently.
 func (s *Server) AppendEntityAssociations(ctx context.Context, req *mnemosv1.AppendEntityAssociationsRequest) (*mnemosv1.AppendResponse, error) {
+	// relationships:write, not claims:write: these are edges, the same resource
+	// family AppendAssociations already gates on. There is no REST twin to
+	// copy (this surface is gRPC-only), so the neighbouring RPC decides it.
+	if err := s.requireScope(ctx, domain.ScopeRelationshipsWrite); err != nil {
+		return nil, err
+	}
 	if len(req.Edges) == 0 {
 		return nil, status.Errorf(codes.InvalidArgument, "edges array is empty")
 	}

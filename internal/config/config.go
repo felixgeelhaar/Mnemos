@@ -188,6 +188,18 @@ type Config struct {
 		Sensitivity scalar `yaml:"sensitivity"`
 	} `yaml:"plasticity"`
 
+	// Pipeline tunes ingest-time behaviour. EpisodicEvents turns on additive
+	// operational-event typing (ADR 0023 part 2) so timeline_query surfaces
+	// deploys/releases/merges/incidents as typed episodes. Off by default: the
+	// classifier is rule-based (~78% precision), safe for an additive tag but
+	// not something to impose on every install.
+	//
+	// It was env-only and absent from this struct, so it could not be set from
+	// a config file at all — while the docs promise every setting can be.
+	Pipeline struct {
+		EpisodicEvents scalar `yaml:"episodic_events"`
+	} `yaml:"pipeline"`
+
 	// Metrics tunes the `serve` Prometheus product-metrics sampler (ADR 0020).
 	// SampleInterval is a Go duration (default 60s; 0 disables the sampler).
 	Metrics struct {
@@ -280,6 +292,7 @@ func (c *Config) EnvOverrides() map[string]string {
 		{"MNEMOS_FLOATBACK_ON_CAPTURE", c.Floatback.OnCapture},
 
 		{"MNEMOS_PLASTICITY_SENSITIVITY", c.Plasticity.Sensitivity},
+		{"MNEMOS_EPISODIC_EVENTS", c.Pipeline.EpisodicEvents},
 
 		{"MNEMOS_METRICS_SAMPLE_INTERVAL", c.Metrics.SampleInterval},
 

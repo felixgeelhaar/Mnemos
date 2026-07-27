@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.klarlabs.de/mnemos/internal/domain"
@@ -167,19 +168,80 @@ func (r LessonRepository) ListEvidence(ctx context.Context, lessonID string) ([]
 
 func (r LessonRepository) hydrateLessons(ctx context.Context, rows []sqlcgen.Lesson) ([]domain.Lesson, error) {
 	out := make([]domain.Lesson, 0, len(rows))
+	ids := make([]string, 0, len(rows))
 	for _, row := range rows {
 		l, err := mapSQLLesson(row)
 		if err != nil {
 			return nil, err
 		}
-		ev, err := r.ListEvidence(ctx, l.ID)
-		if err != nil {
-			return nil, err
-		}
-		l.Evidence = ev
 		out = append(out, l)
+		ids = append(ids, l.ID)
+	}
+	byLesson, err := r.listEvidenceForLessons(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Evidence = byLesson[out[i].ID]
 	}
 	return out, nil
+}
+
+// evidenceHydrationChunk bounds the IN list so a large lesson set stays under
+// SQLite's SQLITE_MAX_VARIABLE_NUMBER (999 on older builds).
+const evidenceHydrationChunk = 500
+
+// listEvidenceForLessons fetches the evidence for MANY lessons in one query per
+// chunk instead of one query per lesson. ListAll/ListByService/ListByTrigger
+// used to issue an extra round trip for every row they returned, so the cost of
+// listing lessons grew linearly with a corpus that only ever grows (each
+// synthesis run adds lessons, none are removed).
+func (r LessonRepository) listEvidenceForLessons(ctx context.Context, lessonIDs []string) (map[string][]string, error) {
+	out := make(map[string][]string, len(lessonIDs))
+	if len(lessonIDs) == 0 {
+		return out, nil
+	}
+	for start := 0; start < len(lessonIDs); start += evidenceHydrationChunk {
+		end := min(start+evidenceHydrationChunk, len(lessonIDs))
+		chunk := lessonIDs[start:end]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		//nolint:gosec // G202: placeholders are literal "?" tokens, not user input
+		rows, err := r.db.QueryContext(ctx, `
+SELECT lesson_id, action_id FROM lesson_evidence
+WHERE lesson_id IN (`+placeholders+`)
+ORDER BY lesson_id, action_id`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("list lesson evidence: %w", err)
+		}
+		if err := scanLessonEvidence(rows, out); err != nil {
+			return nil, err
+		}
+	}
+	// Lessons with no evidence get an empty (non-nil) slice so the hydrated
+	// shape matches the per-lesson path, which returned make([]string, 0).
+	for _, id := range lessonIDs {
+		if _, ok := out[id]; !ok {
+			out[id] = []string{}
+		}
+	}
+	return out, nil
+}
+
+// scanLessonEvidence drains a (lesson_id, action_id) result set into acc.
+func scanLessonEvidence(rows *sql.Rows, acc map[string][]string) error {
+	defer closeRows(rows)
+	for rows.Next() {
+		var lessonID, actionID string
+		if err := rows.Scan(&lessonID, &actionID); err != nil {
+			return fmt.Errorf("scan lesson evidence: %w", err)
+		}
+		acc[lessonID] = append(acc[lessonID], actionID)
+	}
+	return rows.Err()
 }
 
 // ListVersions returns every snapshot row for the given lesson,

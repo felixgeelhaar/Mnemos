@@ -223,28 +223,74 @@ func ensureDatabase(ctx context.Context, parsed DSN) error {
 // nothing on a small DDL file.
 func applySchema(ctx context.Context, db *sql.DB) error {
 	for _, stmt := range splitStatements(schemaSQL) {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			if isBenignSchemaError(stmt, err) {
-				continue
-			}
-			return fmt.Errorf("apply schema stmt %q: %w", firstLine(stmt), err)
+		_, err := db.ExecContext(ctx, stmt)
+		if err == nil {
+			continue
 		}
+		// Vanilla MySQL rejects ALTER TABLE ... ADD COLUMN IF NOT EXISTS as a
+		// SYNTAX error (1064) — it has never supported the clause, MariaDB
+		// aside. Swallowing that error left every pre-existing database stuck
+		// on the schema generation it was created with: new columns landed only
+		// on fresh databases, and the first read touching one failed with
+		// "unknown column". Retry without the clause and let 1060 (duplicate
+		// column) mean "already there".
+		if retry, ok := alterWithoutIfNotExists(stmt, err); ok {
+			if _, rerr := db.ExecContext(ctx, retry); rerr != nil {
+				if isBenignSchemaError(retry, rerr) {
+					continue
+				}
+				return fmt.Errorf("apply schema stmt %q: %w", firstLine(retry), rerr)
+			}
+			continue
+		}
+		if isBenignSchemaError(stmt, err) {
+			continue
+		}
+		return fmt.Errorf("apply schema stmt %q: %w", firstLine(stmt), err)
 	}
 	return nil
 }
 
-// isBenignSchemaError swallows two MySQL idempotency gaps:
+// alterWithoutIfNotExists rewrites an `ALTER TABLE ... ADD COLUMN IF NOT
+// EXISTS` that the server rejected as a syntax error into the plain form, so
+// the column add can be retried on engines lacking the clause. Reports false
+// for any other statement or error.
+func alterWithoutIfNotExists(stmt string, err error) (string, bool) {
+	upper := strings.ToUpper(strings.TrimSpace(stmt))
+	if !strings.HasPrefix(upper, "ALTER TABLE") || !strings.Contains(upper, "ADD COLUMN IF NOT EXISTS") {
+		return "", false
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "1064") && !strings.Contains(msg, "syntax") {
+		return "", false
+	}
+	idx := strings.Index(upper, "IF NOT EXISTS ")
+	if idx < 0 {
+		return "", false
+	}
+	return stmt[:idx] + stmt[idx+len("IF NOT EXISTS "):], true
+}
+
+// isBenignSchemaError swallows three MySQL idempotency gaps:
 //
 //   - Vanilla MySQL (unlike MariaDB) rejects ALTER TABLE ADD COLUMN
-//     IF NOT EXISTS as a syntax error. We translate that branch to
-//     "try the ALTER without IF NOT EXISTS"; the duplicate-column
-//     error 1060 then signals the column already exists, which is
-//     the success case for an upgrade migration.
+//     IF NOT EXISTS as a syntax error. applySchema retries those
+//     without the clause (see alterWithoutIfNotExists); the
+//     duplicate-column error 1060 then signals the column already
+//     exists, which is the success case for an upgrade migration.
 //   - On a fresh database the CREATE TABLE statements just above
 //     have already created the columns, so the ALTERs are no-ops by
 //     design. Treat any 1060 from an ALTER ADD COLUMN as success.
+//   - CREATE INDEX has no IF NOT EXISTS in MySQL at all, so an index
+//     added to an existing table can only be idempotent by tolerating
+//     1061 (duplicate key name) on re-run.
 func isBenignSchemaError(stmt string, err error) bool {
 	upper := strings.ToUpper(strings.TrimSpace(stmt))
+	msgLower := strings.ToLower(err.Error())
+	if strings.HasPrefix(upper, "CREATE INDEX") {
+		// Error 1061: Duplicate key name — the index is already installed.
+		return strings.Contains(msgLower, "1061") || strings.Contains(msgLower, "duplicate key name")
+	}
 	if !strings.HasPrefix(upper, "ALTER TABLE") {
 		return false
 	}
