@@ -181,6 +181,21 @@ func describeDiff(t *testing.T, label string, want, got []domain.Relationship) {
 // and the index path are covered, and the shapes vary the token distribution so
 // the run is not confined to one selectivity regime.
 func TestIncrementalMatchesReference(t *testing.T) {
+	// Corpus sizes are deliberately modest. The expensive side of this
+	// comparison is the REFERENCE, which is the O(new x existing) regex-heavy
+	// implementation being replaced — at 90k pairs a single subtest cost ~8s,
+	// and the whole package ran for ~20s. That matters more than it looks:
+	// tools/mutate runs `go test` once per mutant with a 60s timeout, so a slow
+	// suite both inflates the mutation job and risks a timeout being scored as
+	// a killed mutant.
+	//
+	// The coverage is not what shrinks. This test proves the REFACTOR (hoisting
+	// per-claim derivations out of the pairwise loop) preserved semantics, and
+	// that is a per-pair property — a few thousand pairs per shape samples it as
+	// well as ninety thousand. The riskier property, that the PREFILTER drops no
+	// pair, is proved separately by TestScanAndIndexPathsAgree, which compares
+	// two fast implementations and can therefore afford an order of magnitude
+	// more pairs for a fraction of the time.
 	cases := []struct {
 		name  string
 		opts  corpusOptions
@@ -188,13 +203,17 @@ func TestIncrementalMatchesReference(t *testing.T) {
 	}{
 		{"tiny-scan-path", corpusOptions{Size: 30, VocabSize: 40, Zipf: 0.8, Seed: 1, MinTokens: 3, MaxTokens: 9, ShortShare: 0.3, NumShare: 0.3, NegShare: 0.3, AspectShar: 0.3, ProperShar: 0.3}, 8},
 		{"at-threshold", corpusOptions{Size: 64, VocabSize: 60, Zipf: 0.9, Seed: 2, MinTokens: 3, MaxTokens: 10, ShortShare: 0.3, NumShare: 0.3, NegShare: 0.2, AspectShar: 0.3, ProperShar: 0.2}, 10},
-		{"dense-tiny-vocab", corpusOptions{Size: 400, VocabSize: 25, Zipf: 0.5, Seed: 3, MinTokens: 2, MaxTokens: 6, ShortShare: 0.5, NumShare: 0.4, NegShare: 0.3, AspectShar: 0.4, ProperShar: 0.3}, 25},
-		{"zipf-head-hot", corpusOptions{Size: 1500, VocabSize: 300, Zipf: 1.0, Seed: 4, MinTokens: 4, MaxTokens: 14, ShortShare: 0.15, NumShare: 0.25, NegShare: 0.15, AspectShar: 0.2, ProperShar: 0.15}, 30},
-		{"realistic-tail", defaultCorpusOptions(3000, 5), 30},
-		{"long-claims", corpusOptions{Size: 800, VocabSize: 200, Zipf: 1.1, RankOffset: 20, Seed: 6, MinTokens: 15, MaxTokens: 40, ShortShare: 0.05, NumShare: 0.3, NegShare: 0.2, AspectShar: 0.3, ProperShar: 0.1}, 20},
-		{"all-short-claims", corpusOptions{Size: 900, VocabSize: 50, Zipf: 0.7, Seed: 7, MinTokens: 2, MaxTokens: 3, ShortShare: 1.0, NumShare: 0.35, NegShare: 0.25, AspectShar: 0.35, ProperShar: 0.4}, 30},
+		{"dense-tiny-vocab", corpusOptions{Size: 150, VocabSize: 25, Zipf: 0.5, Seed: 3, MinTokens: 2, MaxTokens: 6, ShortShare: 0.5, NumShare: 0.4, NegShare: 0.3, AspectShar: 0.4, ProperShar: 0.3}, 12},
+		{"zipf-head-hot", corpusOptions{Size: 180, VocabSize: 300, Zipf: 1.0, Seed: 4, MinTokens: 4, MaxTokens: 14, ShortShare: 0.15, NumShare: 0.25, NegShare: 0.15, AspectShar: 0.2, ProperShar: 0.15}, 12},
+		{"realistic-tail", defaultCorpusOptions(400, 5), 12},
+		{"long-claims", corpusOptions{Size: 120, VocabSize: 200, Zipf: 1.1, RankOffset: 20, Seed: 6, MinTokens: 15, MaxTokens: 40, ShortShare: 0.05, NumShare: 0.3, NegShare: 0.2, AspectShar: 0.3, ProperShar: 0.1}, 10},
+		{"all-short-claims", corpusOptions{Size: 150, VocabSize: 50, Zipf: 0.7, Seed: 7, MinTokens: 2, MaxTokens: 3, ShortShare: 1.0, NumShare: 0.35, NegShare: 0.25, AspectShar: 0.35, ProperShar: 0.4}, 12},
 	}
 
+	// A corpus that produces no relationships proves nothing, and these sizes
+	// are tuned for runtime — so the sweep asserts it stayed substantive rather
+	// than trusting whoever tunes them next.
+	totalRels := 0
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			existing := generateCorpus(tc.opts)
@@ -215,10 +234,14 @@ func TestIncrementalMatchesReference(t *testing.T) {
 				t.Fatalf("optimised: %v", err)
 			}
 			assertSameRelationships(t, tc.name, want, got)
+			totalRels += len(want)
 			t.Logf("path=%s pairs_possible=%d pairs_probed=%d pairs_evaluated=%d rels=%d (%.4f%% of pairs evaluated)",
 				stats.Path, stats.PairsPossible, stats.PairsProbed, stats.PairsEvaluated, len(got),
 				100*float64(stats.PairsEvaluated)/float64(max(stats.PairsPossible, 1)))
 		})
+	}
+	if totalRels < 500 {
+		t.Errorf("sweep produced only %d relationships; the corpora have been shrunk past the point of testing anything", totalRels)
 	}
 }
 
@@ -232,6 +255,14 @@ func TestIncrementalMatchesReferenceOnFixtureCorpus(t *testing.T) {
 	if len(texts) < 100 {
 		t.Fatalf("fixture corpus too small (%d texts) to be a meaningful check", len(texts))
 	}
+	// Bounded for the same reason the randomised sizes are: the reference side
+	// is quadratic and the whole package has to stay inside tools/mutate's
+	// per-mutant budget. Every harvested text still reaches the tokenizer
+	// through TestTokenizeContentIntoMatchesContentTokens, which is linear and
+	// therefore cheap enough to run on all of them.
+	if len(texts) > 180 {
+		texts = texts[:180]
+	}
 	t.Logf("fixture corpus: %d claim texts", len(texts))
 
 	claims := make([]domain.Claim, 0, len(texts))
@@ -244,10 +275,10 @@ func TestIncrementalMatchesReferenceOnFixtureCorpus(t *testing.T) {
 		})
 	}
 
-	// Every fixture text takes a turn as a new claim, against the whole corpus
-	// as the existing side. The corpus is well under indexCorpusThreshold in
-	// some slices and well over in others, so both paths run.
-	for _, split := range []int{1, 7, 64, 200, len(claims) / 2} {
+	// The splits straddle indexCorpusThreshold in both directions: the first
+	// three leave a large existing side (index path), the last leaves a small
+	// one (scan path), so real English text goes through both.
+	for _, split := range []int{1, 5, 25, len(claims) - 40} {
 		if split <= 0 || split >= len(claims) {
 			continue
 		}
@@ -369,61 +400,93 @@ func TestIncrementalTestResultEquivalence(t *testing.T) {
 }
 
 // TestScanAndIndexPathsAgree isolates the prefilter from the refactor: it runs
-// the same corpus through both internal paths by moving indexCorpusThreshold out
-// of the way, so a disagreement can only come from the candidate narrowing.
+// the same corpus through both internal paths, so a disagreement can only come
+// from the candidate narrowing.
+//
+// This is the load-bearing correctness test of the change, and it can afford to
+// be the big one. Both sides are the fast implementation — the reference is not
+// involved — so a pair costs about 2us here against about 90us in
+// TestIncrementalMatchesReference. That buys an order of magnitude more pairs,
+// across more corpus shapes, for a fraction of the runtime.
 func TestScanAndIndexPathsAgree(t *testing.T) {
-	for _, seed := range []int64{11, 12, 13, 14, 15} {
-		opts := defaultCorpusOptions(700, seed)
-		opts.VocabSize = 150
-		opts.RankOffset = 5
-		existing := generateCorpus(opts)
-		batch := opts
-		batch.Size = 40
-		batch.Seed = seed + 500
-		newClaims := generateCorpus(batch)
-		for i := range newClaims {
-			newClaims[i].ID = fmt.Sprintf("cl_new_%04d", i)
-		}
-
-		var scanRels, indexRels []domain.Relationship
-		var err error
-
-		e := equivalenceEngine()
-		stats := IncrementalStats{}
-		newDerived := make([]*claimDerived, len(newClaims))
-		for i := range newClaims {
-			tok, neg := contentTokensAndPolarity(newClaims[i].Text)
-			newDerived[i] = newClaimDerived(newClaims[i].Text, tok, neg)
-		}
-		collect := func(dst *[]domain.Relationship) func(int, int32, domain.RelationshipType) error {
-			return func(i int, j int32, rt domain.RelationshipType) error {
-				id, idErr := e.nextID()
-				if idErr != nil {
-					return idErr
-				}
-				*dst = append(*dst, domain.Relationship{ID: id, Type: rt, FromClaimID: newClaims[i].ID, ToClaimID: existing[j].ID})
-				return nil
-			}
-		}
-		if err = e.scanPass(newDerived, existing, collect(&scanRels), &stats); err != nil {
-			t.Fatalf("scanPass: %v", err)
-		}
-		e2 := equivalenceEngine()
-		e = e2
-		newDerived2 := make([]*claimDerived, len(newClaims))
-		for i := range newClaims {
-			tok, neg := contentTokensAndPolarity(newClaims[i].Text)
-			newDerived2[i] = newClaimDerived(newClaims[i].Text, tok, neg)
-		}
-		stats2 := IncrementalStats{}
-		if err = e2.indexedPass(newDerived2, existing, collect(&indexRels), &stats2); err != nil {
-			t.Fatalf("indexedPass: %v", err)
-		}
-		assertSameRelationships(t, fmt.Sprintf("seed=%d", seed), scanRels, indexRels)
-		t.Logf("seed=%d rels=%d scan_evaluated=%d index_evaluated=%d (%.2f%% of pairs)",
-			seed, len(scanRels), stats.PairsEvaluated, stats2.PairsEvaluated,
-			100*float64(stats2.PairsEvaluated)/float64(max(stats.PairsEvaluated, 1)))
+	shapes := []struct {
+		name string
+		opts corpusOptions
+	}{
+		// Dense: many candidates survive the prefilter, so the ov>=2 branch of
+		// the gate is exercised constantly.
+		{"dense", corpusOptions{VocabSize: 150, Zipf: 1.0, RankOffset: 5, MinTokens: 5, MaxTokens: 18, ShortShare: 0.10, NumShare: 0.20, NegShare: 0.12, AspectShar: 0.15, ProperShar: 0.10}},
+		// Sparse: almost every candidate has overlap exactly 1, which is the
+		// branch singleOverlapCanFire decides. If that gate were too strict this
+		// is where edges would go missing.
+		{"sparse", corpusOptions{VocabSize: 4000, Zipf: 1.0, RankOffset: 120, MinTokens: 5, MaxTokens: 18, ShortShare: 0.10, NumShare: 0.20, NegShare: 0.12, AspectShar: 0.15, ProperShar: 0.10}},
+		// Short claims: the only shape where an overlap of 1 may legitimately
+		// fire, through the entity / numeric / temporal divergence detectors.
+		{"short", corpusOptions{VocabSize: 60, Zipf: 0.7, MinTokens: 2, MaxTokens: 3, ShortShare: 1.0, NumShare: 0.35, NegShare: 0.25, AspectShar: 0.35, ProperShar: 0.4}},
+		// Long claims: large anchor sets, so singleOverlapCanFire must reject.
+		{"long", corpusOptions{VocabSize: 250, Zipf: 1.1, RankOffset: 20, MinTokens: 15, MaxTokens: 40, ShortShare: 0.0, NumShare: 0.3, NegShare: 0.2, AspectShar: 0.3, ProperShar: 0.1}},
 	}
+
+	totalPairs, totalRels := 0, 0
+	for _, shape := range shapes {
+		for _, seed := range []int64{11, 12} {
+			opts := shape.opts
+			opts.Size = 600
+			opts.Seed = seed
+			existing := generateCorpus(opts)
+			batch := opts
+			batch.Size = 20
+			batch.Seed = seed + 500
+			newClaims := generateCorpus(batch)
+			for i := range newClaims {
+				newClaims[i].ID = fmt.Sprintf("cl_new_%04d", i)
+			}
+
+			scanRels, scanStats, err := runPass(newClaims, existing, (Engine).scanPass)
+			if err != nil {
+				t.Fatalf("%s seed=%d scanPass: %v", shape.name, seed, err)
+			}
+			indexRels, indexStats, err := runPass(newClaims, existing, (Engine).indexedPass)
+			if err != nil {
+				t.Fatalf("%s seed=%d indexedPass: %v", shape.name, seed, err)
+			}
+			assertSameRelationships(t, fmt.Sprintf("%s seed=%d", shape.name, seed), scanRels, indexRels)
+
+			totalPairs += len(newClaims) * len(existing)
+			totalRels += len(scanRels)
+			t.Logf("%-7s seed=%d rels=%-5d scan_evaluated=%-6d index_evaluated=%-6d (%.2f%%)",
+				shape.name, seed, len(scanRels), scanStats.PairsEvaluated, indexStats.PairsEvaluated,
+				100*float64(indexStats.PairsEvaluated)/float64(max(scanStats.PairsEvaluated, 1)))
+		}
+	}
+	t.Logf("total: %d pairs compared, %d relationships, all identical", totalPairs, totalRels)
+	if totalRels == 0 {
+		t.Fatal("no relationships produced; the comparison is vacuous")
+	}
+}
+
+// runPass drives one of the two candidate-enumeration passes and collects what
+// it emitted, so the two can be compared without going through the citation and
+// test-conflict stages they share.
+func runPass(newClaims, existing []domain.Claim, pass func(Engine, []*claimDerived, []domain.Claim, func(int, int32, domain.RelationshipType) error, *IncrementalStats) error) ([]domain.Relationship, IncrementalStats, error) {
+	e := equivalenceEngine()
+	derived := make([]*claimDerived, len(newClaims))
+	for i := range newClaims {
+		tok, neg := contentTokensAndPolarity(newClaims[i].Text)
+		derived[i] = newClaimDerived(newClaims[i].Text, tok, neg)
+	}
+	var out []domain.Relationship
+	stats := IncrementalStats{}
+	emit := func(i int, j int32, rt domain.RelationshipType) error {
+		id, err := e.nextID()
+		if err != nil {
+			return err
+		}
+		out = append(out, domain.Relationship{ID: id, Type: rt, FromClaimID: newClaims[i].ID, ToClaimID: existing[j].ID})
+		return nil
+	}
+	err := pass(e, derived, existing, emit, &stats)
+	return out, stats, err
 }
 
 // TestTokenizeContentIntoMatchesContentTokens guards the one place the two

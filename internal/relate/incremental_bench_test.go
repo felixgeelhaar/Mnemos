@@ -2,6 +2,7 @@ package relate
 
 import (
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -44,8 +45,10 @@ func BenchmarkDetectIncremental(b *testing.B) {
 
 // TestCorpusProfile is not an assertion — it prints the document-frequency
 // profile of each benchmark corpus so the benchmark numbers can be read against
-// the selectivity they were measured under. Run with -v.
+// the selectivity they were measured under. Opt-in for the same reason as
+// TestIncrementalSelectivity.
 func TestCorpusProfile(t *testing.T) {
+	requireReportMode(t)
 	for _, size := range []int{1000, 10000, 50000} {
 		p := profileCorpus(generateCorpus(defaultCorpusOptions(size, 1)))
 		t.Logf("size=%-6d distinct=%-6d postings=%-8d avgTokens=%.1f medianDF=%-4d p99DF=%-6d maxDF=%d",
@@ -90,11 +93,15 @@ func benchBatch() []domain.Claim {
 
 // TestIncrementalSelectivity reports, for each benchmark corpus size, how much
 // of the pair space the index eliminates. Deterministic — unlike wall clock, it
-// does not move when the machine is busy. Run with -v.
+// does not move when the machine is busy.
+//
+// It asserts nothing, and building a 50k-claim corpus costs seconds, so it is
+// opt-in: MNEMOS_RELATE_REPORT=1 go test -run TestIncrementalSelectivity -v.
+// Leaving it on by default would be paid on every run of the package —
+// including once per mutant by tools/mutate, which runs the suite with a 60s
+// timeout — to print a table nobody is reading.
 func TestIncrementalSelectivity(t *testing.T) {
-	if testing.Short() {
-		t.Skip("builds a 50k-claim corpus")
-	}
+	requireReportMode(t)
 	newClaims := benchBatch()
 	for _, size := range []int{1000, 10000, 50000} {
 		existing := generateCorpus(defaultCorpusOptions(size, 1))
@@ -126,5 +133,16 @@ func BenchmarkBuildCandidateIndex(b *testing.B) {
 				_ = buildCandidateIndex(existing)
 			}
 		})
+	}
+}
+
+// requireReportMode skips a reporting-only test unless MNEMOS_RELATE_REPORT is
+// set. These tests exist to produce numbers for a human, not to guard
+// behaviour, and the corpora they build are large enough that running them by
+// default would slow every invocation of the package's tests.
+func requireReportMode(t *testing.T) {
+	t.Helper()
+	if os.Getenv("MNEMOS_RELATE_REPORT") == "" {
+		t.Skip("reporting-only; set MNEMOS_RELATE_REPORT=1 to run")
 	}
 }
