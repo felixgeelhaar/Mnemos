@@ -1008,11 +1008,76 @@ func (s *Server) AppendEmbeddings(ctx context.Context, req *mnemosv1.AppendEmbed
 // ---------------------------------------------------------------------------
 
 // Metrics returns aggregate counts (events, claims, contradictions, embeddings) and the running version.
+//
+// F.4.b on the read side. These are aggregates, but an aggregate over runs the
+// token cannot read is still a read of them: "how many episodes exist" and "how
+// many beliefs are contested" leak the size and health of every other run's
+// graph, and differencing successive calls leaks its activity. MetricsRequest
+// carries no run_id, so — exactly as in ListEpisodes — "reject a request for
+// someone else's run" is not expressible and the only fail-closed reading is to
+// compute the aggregates over the whitelist alone. Episodes with no run at all
+// are excluded: a run-scoped token was granted named runs, and "unassigned" is
+// not one of them.
 func (s *Server) Metrics(ctx context.Context, _ *mnemosv1.MetricsRequest) (*mnemosv1.MetricsResponse, error) {
 	events, _ := s.connFor(ctx).Events.ListAll(ctx)
 	claims, _ := s.connFor(ctx).Claims.ListAll(ctx)
 	eventEmbs, _ := s.connFor(ctx).Embeddings.ListByEntityType(ctx, "event")
 	claimEmbs, _ := s.connFor(ctx).Embeddings.ListByEntityType(ctx, "claim")
+
+	if allowed := allowedRunsFromContext(ctx); len(allowed) > 0 {
+		keptEvents := events[:0]
+		allowedEventIDs := map[string]struct{}{}
+		for _, e := range events {
+			if runAllowed(allowed, e.RunID) {
+				keptEvents = append(keptEvents, e)
+				allowedEventIDs[e.ID] = struct{}{}
+			}
+		}
+		events = keptEvents
+
+		// A belief's run is only reachable through its evidence links — the same
+		// route ListBeliefs takes for its run_id filter.
+		claimIDs := make([]string, 0, len(claims))
+		for _, c := range claims {
+			claimIDs = append(claimIDs, c.ID)
+		}
+		visibleClaims := map[string]struct{}{}
+		if len(claimIDs) > 0 && len(allowedEventIDs) > 0 {
+			links, err := s.connFor(ctx).Claims.ListEvidenceByClaimIDs(ctx, claimIDs)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "load evidence for run scope: %v", err)
+			}
+			for _, l := range links {
+				if _, ok := allowedEventIDs[l.EventID]; ok {
+					visibleClaims[l.ClaimID] = struct{}{}
+				}
+			}
+		}
+		keptClaims := claims[:0]
+		for _, c := range claims {
+			if _, ok := visibleClaims[c.ID]; ok {
+				keptClaims = append(keptClaims, c)
+			}
+		}
+		claims = keptClaims
+
+		// An embedding is an index entry for its entity, so it is legible
+		// exactly when its entity is.
+		keptEventEmbs := eventEmbs[:0]
+		for _, e := range eventEmbs {
+			if _, ok := allowedEventIDs[e.EntityID]; ok {
+				keptEventEmbs = append(keptEventEmbs, e)
+			}
+		}
+		eventEmbs = keptEventEmbs
+		keptClaimEmbs := claimEmbs[:0]
+		for _, e := range claimEmbs {
+			if _, ok := visibleClaims[e.EntityID]; ok {
+				keptClaimEmbs = append(keptClaimEmbs, e)
+			}
+		}
+		claimEmbs = keptClaimEmbs
+	}
 
 	runs := map[string]struct{}{}
 	for _, e := range events {
@@ -1026,6 +1091,8 @@ func (s *Server) Metrics(ctx context.Context, _ *mnemosv1.MetricsRequest) (*mnem
 			contestedClaims++
 		}
 	}
+	// Associations and dissonances are counted from the surviving beliefs, so
+	// the run narrowing above carries into them without a second filter.
 	ids := make([]string, 0, len(claims))
 	for _, c := range claims {
 		ids = append(ids, c.ID)
