@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"log"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 
 	"go.klarlabs.de/mnemos"
@@ -52,15 +55,88 @@ var (
 	tenantMemsSrv = map[string]mnemos.Memory{}
 )
 
-// scopedMem returns a per-tenant Memory view (cached) when the request carries a
-// tenant, else the shared fallback. When a tenant IS present but its view can't
-// be opened, it returns nil (fail closed) so the cognitive endpoints' nil-guard
+// reqMemKey carries a request-scoped tenant Memory view, used in place of the
+// process-wide cache above when caching is unsafe (see reqMem).
+type reqMemKey struct{}
+
+// reqMem is a lazily-built, request-scoped tenant Memory view: opened on first
+// use by scopedMem and closed by tenantScopeMiddleware when the request ends.
+//
+// It exists because a Memory owns a store connection, and under the Postgres
+// shared-pool mode (MNEMOS_PG_SHARED_POOL, ADR 0007 Phase 2) that connection is
+// ONE *sql.Conn checked out of a single process-wide pool, whose Closer resets
+// the mnemos.tenant GUC and hands it back. A process-lifetime cache of such a
+// facade never closes it before shutdown, so the connection never returns to
+// the pool: one permanently pinned connection per tenant, until the pool is
+// exhausted and every tenant stalls on a checkout that can never happen. The
+// read-conn cache next door already declines to cache under this mode
+// (enableConnCache in dsn.go); this is the same decision for the cognitive path.
+//
+// Lazy rather than opened by the middleware: building a facade opens a
+// connection and boots the query/chronos wiring, and most endpoints never touch
+// the cognitive layer. Only a request that actually calls scopedMem pays.
+type reqMem struct {
+	mu    sync.Mutex
+	built bool
+	mem   mnemos.Memory
+}
+
+// get returns the request's tenant view, building it on first use. A build
+// failure is remembered as nil so scopedMem's callers fail closed (503) rather
+// than retrying an open that is not going to start working mid-request.
+func (r *reqMem) get(fallback mnemos.Memory, tenant string) mnemos.Memory {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.built {
+		r.built = true
+		if m, err := fallback.Tenant(tenant); err == nil {
+			r.mem = m
+		}
+	}
+	return r.mem
+}
+
+// close releases the view and, with it, the connection the facade holds.
+func (r *reqMem) close() error {
+	r.mu.Lock()
+	m := r.mem
+	r.mem = nil
+	r.mu.Unlock()
+	if m == nil {
+		return nil
+	}
+	return m.Close()
+}
+
+// tenantMemCacheSafe reports whether a per-tenant Memory view may be cached for
+// the life of the process. It is not under the Postgres shared-pool mode: see
+// reqMem for why a cached facade there pins a pooled connection forever.
+// Mirrors enableConnCache's env test — same variable, same reading.
+func tenantMemCacheSafe() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MNEMOS_PG_SHARED_POOL"))) {
+	case "1", "true", "yes":
+		return false
+	}
+	return true
+}
+
+// scopedMem returns a per-tenant Memory view when the request carries a tenant,
+// else the shared fallback. When a tenant IS present but its view can't be
+// opened, it returns nil (fail closed) so the cognitive endpoints' nil-guard
 // yields a 503 — never the shared __default__ facade, which would serve the
 // wrong partition's data.
+//
+// The view is normally cached per tenant for the life of the server. When
+// tenantScopeMiddleware decided caching is unsafe it stashed a request-scoped
+// holder instead (see reqMem); this reads that first, so every call within one
+// request still gets the same instance and it is closed when the request ends.
 func scopedMem(ctx context.Context, fallback mnemos.Memory) mnemos.Memory {
 	tenant, ok := tenantFromContext(ctx)
 	if !ok || fallback == nil {
 		return fallback
+	}
+	if rm, ok := ctx.Value(reqMemKey{}).(*reqMem); ok && rm != nil {
+		return rm.get(fallback, tenant)
 	}
 	tenantMemMu.Lock()
 	defer tenantMemMu.Unlock()
@@ -114,6 +190,19 @@ func tenantScopeMiddleware(next http.Handler) http.Handler {
 		}
 		defer func() { _ = gw.Close() }()
 		ctx = withReqWriter(ctx, gw)
+		// The cognitive path's per-tenant Memory view. Cached process-wide by
+		// default; under the Postgres shared-pool mode a cached facade would pin
+		// its pooled connection for good, so scope it to the request and close it
+		// here (scopedMem builds it lazily, only if an endpoint asks).
+		if !tenantMemCacheSafe() {
+			rm := &reqMem{}
+			defer func() {
+				if cerr := rm.close(); cerr != nil {
+					log.Printf("close request memory: %v", cerr)
+				}
+			}()
+			ctx = context.WithValue(ctx, reqMemKey{}, rm)
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
