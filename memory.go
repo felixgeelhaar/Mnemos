@@ -331,7 +331,9 @@ type ScanQuery struct {
 	// bound.
 	ValidUntil time.Time
 
-	// Limit caps the number of claims returned. 0 means "no limit".
+	// Limit caps the number of claims returned, up to [ScanMaxResults].
+	// 0 means [ScanMaxResults] — it used to mean "no limit", which over a
+	// delivery adapter made a full corpus dump a one-line request.
 	Limit int
 }
 
@@ -1117,6 +1119,10 @@ type Memory interface {
 	// graph never made — ranked by similarity. Deterministic detection; naming the
 	// emergent schema/hypothesis is left to a human or an LLM (proposals, never
 	// auto-promoted).
+	//
+	// BOUNDED: the pair scan is capped at the most salient
+	// [RecombineMaxCandidates] claims and limit at [MaxCognitiveResults]; see
+	// [BoundedCognition] to learn whether an answer was truncated.
 	Recombinations(ctx context.Context, limit int) ([]Recombination, error)
 
 	// ClassifyClaim routes a candidate claim by fit to established knowledge: if the
@@ -1150,6 +1156,9 @@ type Memory interface {
 	// by expected information gain (salience × uncertainty × staleness), returning
 	// the top ones as an agenda of "what to seek next". Turns memory from reactive
 	// to agenda-setting: mnemos proposes, the agent disposes. Deterministic.
+	//
+	// BOUNDED: limit is capped at [MaxCognitiveResults]; see [BoundedCognition]
+	// to learn whether an answer was truncated.
 	KnowledgeGaps(ctx context.Context, limit int) ([]Gap, error)
 
 	// RecordAction records an operational action an agent took (a deploy, a
@@ -1175,6 +1184,9 @@ type Memory interface {
 	// claims cover the topic) × reliability (the mean trust of those claims), so a
 	// knowledge gap routes to the right expert-memory instead of a flat search.
 	// Unattributed claims are ignored; empty when no attributed claim matches.
+	//
+	// BOUNDED: limit is capped at [MaxCognitiveResults]; see [BoundedCognition]
+	// to learn whether an answer was truncated.
 	WhoKnows(ctx context.Context, query string, limit int) ([]Expert, error)
 
 	// AnalogousClaims finds claims whose surrounding typed subgraph is structurally
@@ -1184,6 +1196,11 @@ type Memory interface {
 	// services, or metrics differ — "we've seen this shape before", something a
 	// pure-vector store cannot do. One representative per neighbourhood, strongest
 	// structural similarity first; empty when the anchor has no local structure.
+	//
+	// BOUNDED: the epistemic graph is loaded once (two store round trips whatever
+	// the corpus size) and fingerprinting stops after [AnalogNodeBudget] node
+	// visits; limit is capped at [MaxCognitiveResults]. See [BoundedCognition] to
+	// learn whether an answer was truncated.
 	AnalogousClaims(ctx context.Context, claimID string, limit int) ([]Analogy, error)
 
 	// RecallIterative runs recall as a bounded retrieve↔reason fixpoint instead of a
@@ -1230,6 +1247,10 @@ type Memory interface {
 	// window described by the [ScanQuery], ordered by ValidFrom. It is the
 	// stable time-range read on the API surface, complementing the
 	// similarity-ranked [Memory.Recall] and the exact [Memory.Get].
+	//
+	// BOUNDED: [ScanQuery.Limit] is capped at [ScanMaxResults], and a zero Limit
+	// means that cap rather than "the whole brain". See [BoundedCognition] to
+	// learn whether an answer was truncated.
 	Scan(ctx context.Context, q ScanQuery) ([]Claim, error)
 
 	// RememberEvent stores a temporal event. The event is appended to
@@ -1276,6 +1297,10 @@ type Memory interface {
 	// can route the highest-stakes conflicts to the front of the curation queue.
 	// It reads the epistemic graph (contradicts edges, populated on write); a
 	// contradiction of a low-trust, unvetted claim is not an alert and is omitted.
+	//
+	// BOUNDED: returns the first [HypercorrectionDefaultLimit] alerts. See
+	// [BoundedCognition] for a different page size, the true alert count, and
+	// whether an answer was truncated.
 	Hypercorrections(ctx context.Context) ([]Hypercorrection, error)
 
 	// Calibration measures whether stated confidence is itself trustworthy — the

@@ -9,6 +9,25 @@ import (
 // Connected-brain MCP tools (parity with the HTTP /v1/who-knows etc. and the
 // gRPC WhoKnows etc.). Each handler runs against the library Memory facade the
 // MCP server builds lazily; these are the agent-facing cognitive reads.
+//
+// Every one of these reads is BOUNDED (see mnemos.Bounds): the library caps the
+// work each does so a one-line MCP request cannot buy an unbounded pair scan or
+// a full corpus dump. The handlers below carry the resulting mnemos.Bounds into
+// the tool response, because a bounded answer that looks complete is worse than
+// a slow one — an agent that cannot see it was handed the top 20 of 4,000
+// candidates will reason as though it saw the whole brain.
+//
+// The bounds come from the optional mnemos.BoundedCognition capability. A
+// Memory that does not implement it still gets the caps (they live inside the
+// stable methods); it just reports a zero Bounds, which reads as "not
+// truncated". boundedMem is the single place that assertion is made.
+
+// boundedMem returns mem's bounded-cognition capability, or false when the
+// implementation does not expose one.
+func boundedMem(mem mnemos.Memory) (mnemos.BoundedCognition, bool) {
+	bc, ok := mem.(mnemos.BoundedCognition)
+	return bc, ok
+}
 
 type mcpWhoKnowsInput struct {
 	Query string `json:"query" jsonschema:"required,description=Topic/question to find expert workers for"`
@@ -21,8 +40,9 @@ type mcpExpert struct {
 	ClaimCount  int     `json:"belief_count"`
 }
 type mcpWhoKnowsOutput struct {
-	Query   string      `json:"query"`
-	Experts []mcpExpert `json:"experts"`
+	Query   string        `json:"query"`
+	Experts []mcpExpert   `json:"experts"`
+	Bounds  mnemos.Bounds `json:"bounds"`
 }
 
 func mcpWhoKnows(ctx context.Context, mem mnemos.Memory, in mcpWhoKnowsInput) (mcpWhoKnowsOutput, error) {
@@ -30,11 +50,21 @@ func mcpWhoKnows(ctx context.Context, mem mnemos.Memory, in mcpWhoKnowsInput) (m
 	if limit <= 0 {
 		limit = 10
 	}
-	experts, err := mem.WhoKnows(ctx, in.Query, limit)
-	if err != nil {
-		return mcpWhoKnowsOutput{}, err
+	var experts []mnemos.Expert
+	var bounds mnemos.Bounds
+	if bc, ok := boundedMem(mem); ok {
+		rep, err := bc.WhoKnowsBounded(ctx, in.Query, limit)
+		if err != nil {
+			return mcpWhoKnowsOutput{}, err
+		}
+		experts, bounds = rep.Experts, rep.Bounds
+	} else {
+		var err error
+		if experts, err = mem.WhoKnows(ctx, in.Query, limit); err != nil {
+			return mcpWhoKnowsOutput{}, err
+		}
 	}
-	out := mcpWhoKnowsOutput{Query: in.Query, Experts: []mcpExpert{}}
+	out := mcpWhoKnowsOutput{Query: in.Query, Experts: []mcpExpert{}, Bounds: bounds}
 	for _, e := range experts {
 		out.Experts = append(out.Experts, mcpExpert{e.Worker, e.Affinity, e.Reliability, e.ClaimCount})
 	}
@@ -51,7 +81,8 @@ type mcpGap struct {
 	Score   float64 `json:"score"`
 }
 type mcpKnowledgeGapsOutput struct {
-	Gaps []mcpGap `json:"gaps"`
+	Gaps   []mcpGap      `json:"gaps"`
+	Bounds mnemos.Bounds `json:"bounds"`
 }
 
 func mcpKnowledgeGaps(ctx context.Context, mem mnemos.Memory, in mcpKnowledgeGapsInput) (mcpKnowledgeGapsOutput, error) {
@@ -59,11 +90,21 @@ func mcpKnowledgeGaps(ctx context.Context, mem mnemos.Memory, in mcpKnowledgeGap
 	if limit <= 0 {
 		limit = 20
 	}
-	gaps, err := mem.KnowledgeGaps(ctx, limit)
-	if err != nil {
-		return mcpKnowledgeGapsOutput{}, err
+	var gaps []mnemos.Gap
+	var bounds mnemos.Bounds
+	if bc, ok := boundedMem(mem); ok {
+		rep, err := bc.KnowledgeGapsBounded(ctx, limit)
+		if err != nil {
+			return mcpKnowledgeGapsOutput{}, err
+		}
+		gaps, bounds = rep.Gaps, rep.Bounds
+	} else {
+		var err error
+		if gaps, err = mem.KnowledgeGaps(ctx, limit); err != nil {
+			return mcpKnowledgeGapsOutput{}, err
+		}
 	}
-	out := mcpKnowledgeGapsOutput{Gaps: []mcpGap{}}
+	out := mcpKnowledgeGapsOutput{Gaps: []mcpGap{}, Bounds: bounds}
 	for _, g := range gaps {
 		out.Gaps = append(out.Gaps, mcpGap{g.ClaimID, g.Text, g.Kind, g.Score})
 	}
@@ -145,14 +186,28 @@ type mcpHypercorrection struct {
 }
 type mcpHypercorrectionsOutput struct {
 	Hypercorrections []mcpHypercorrection `json:"hypercorrections"`
+	Bounds           mnemos.Bounds        `json:"bounds"`
 }
 
 func mcpHypercorrections(ctx context.Context, mem mnemos.Memory, _ struct{}) (mcpHypercorrectionsOutput, error) {
-	hcs, err := mem.Hypercorrections(ctx)
-	if err != nil {
-		return mcpHypercorrectionsOutput{}, err
+	var hcs []mnemos.Hypercorrection
+	var bounds mnemos.Bounds
+	if bc, ok := boundedMem(mem); ok {
+		// 0 = the library default page (mnemos.HypercorrectionDefaultLimit). The
+		// tool takes no limit input yet; Bounds.Available carries the true alert
+		// count so an agent can still see how deep the queue is.
+		rep, err := bc.HypercorrectionsBounded(ctx, 0)
+		if err != nil {
+			return mcpHypercorrectionsOutput{}, err
+		}
+		hcs, bounds = rep.Hypercorrections, rep.Bounds
+	} else {
+		var err error
+		if hcs, err = mem.Hypercorrections(ctx); err != nil {
+			return mcpHypercorrectionsOutput{}, err
+		}
 	}
-	out := mcpHypercorrectionsOutput{Hypercorrections: []mcpHypercorrection{}}
+	out := mcpHypercorrectionsOutput{Hypercorrections: []mcpHypercorrection{}, Bounds: bounds}
 	for _, h := range hcs {
 		out.Hypercorrections = append(out.Hypercorrections, mcpHypercorrection{
 			h.ContradictedClaimID, h.ContradictedText, h.ContradictedTrust, h.ContradictedPromoted,
@@ -174,6 +229,7 @@ type mcpRecombination struct {
 }
 type mcpRecombinationsOutput struct {
 	Recombinations []mcpRecombination `json:"recombinations"`
+	Bounds         mnemos.Bounds      `json:"bounds"`
 }
 
 func mcpRecombinations(ctx context.Context, mem mnemos.Memory, in mcpRecombinationsInput) (mcpRecombinationsOutput, error) {
@@ -181,11 +237,21 @@ func mcpRecombinations(ctx context.Context, mem mnemos.Memory, in mcpRecombinati
 	if limit <= 0 {
 		limit = 20
 	}
-	recs, err := mem.Recombinations(ctx, limit)
-	if err != nil {
-		return mcpRecombinationsOutput{}, err
+	var recs []mnemos.Recombination
+	var bounds mnemos.Bounds
+	if bc, ok := boundedMem(mem); ok {
+		rep, err := bc.RecombinationsBounded(ctx, limit)
+		if err != nil {
+			return mcpRecombinationsOutput{}, err
+		}
+		recs, bounds = rep.Recombinations, rep.Bounds
+	} else {
+		var err error
+		if recs, err = mem.Recombinations(ctx, limit); err != nil {
+			return mcpRecombinationsOutput{}, err
+		}
 	}
-	out := mcpRecombinationsOutput{Recombinations: []mcpRecombination{}}
+	out := mcpRecombinationsOutput{Recombinations: []mcpRecombination{}, Bounds: bounds}
 	for _, r := range recs {
 		out.Recombinations = append(out.Recombinations, mcpRecombination{r.ClaimA, r.TextA, r.ClaimB, r.TextB, r.Similarity})
 	}
@@ -202,8 +268,9 @@ type mcpAnalogy struct {
 	Similarity float64 `json:"similarity"`
 }
 type mcpAnalogousOutput struct {
-	ClaimID   string       `json:"belief_id"`
-	Analogous []mcpAnalogy `json:"analogous"`
+	ClaimID   string        `json:"belief_id"`
+	Analogous []mcpAnalogy  `json:"analogous"`
+	Bounds    mnemos.Bounds `json:"bounds"`
 }
 
 func mcpAnalogousClaims(ctx context.Context, mem mnemos.Memory, in mcpAnalogousInput) (mcpAnalogousOutput, error) {
@@ -211,11 +278,21 @@ func mcpAnalogousClaims(ctx context.Context, mem mnemos.Memory, in mcpAnalogousI
 	if limit <= 0 {
 		limit = 10
 	}
-	analogies, err := mem.AnalogousClaims(ctx, in.ClaimID, limit)
-	if err != nil {
-		return mcpAnalogousOutput{}, err
+	var analogies []mnemos.Analogy
+	var bounds mnemos.Bounds
+	if bc, ok := boundedMem(mem); ok {
+		rep, err := bc.AnalogousClaimsBounded(ctx, in.ClaimID, limit)
+		if err != nil {
+			return mcpAnalogousOutput{}, err
+		}
+		analogies, bounds = rep.Analogous, rep.Bounds
+	} else {
+		var err error
+		if analogies, err = mem.AnalogousClaims(ctx, in.ClaimID, limit); err != nil {
+			return mcpAnalogousOutput{}, err
+		}
 	}
-	out := mcpAnalogousOutput{ClaimID: in.ClaimID, Analogous: []mcpAnalogy{}}
+	out := mcpAnalogousOutput{ClaimID: in.ClaimID, Analogous: []mcpAnalogy{}, Bounds: bounds}
 	for _, a := range analogies {
 		out.Analogous = append(out.Analogous, mcpAnalogy{a.ClaimID, a.Text, a.Similarity})
 	}
