@@ -237,26 +237,61 @@ func buildBenchCorpusWithModel(tb testing.TB, n int, model string) *benchCorpus 
 // Wall clock (ns/op) is reported by the framework but is NOISY on a machine
 // running several suites at once — read `vectors/op`, the number of stored
 // vectors recall materialises and cosines in Go. That number is exact, is
-// what grows linearly with the brain, and is what this work reduces.
+// what grows linearly with the brain, and is what this work reduces. The
+// corpus-scan arm reports only `tablescans/op` because its whole point is that
+// each scan is the entire table.
 //
 // Run with:
 //
 //	MNEMOS_DB_URL='memory://throwaway' go test -run '^$' -bench BenchmarkRecall_SQLite \
 //	  -benchtime 10x ./internal/query/
+//
+// It has two arms per corpus size, measured back to back in ONE binary over
+// ONE fixture — the only honest way to compare wall clock here:
+//
+//	corpus-scan  the pre-change behaviour, forced by hiding the store's
+//	             candidate-scoped searcher (corpusOnlyRepo)
+//	candidate    the shipped behaviour
 func BenchmarkRecall_SQLite(b *testing.B) {
+	const question = "why is payments latency high?"
 	for _, n := range []int{1000, 10000, 50000} {
-		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
-			c := buildBenchCorpus(b, n)
-			ctx := context.Background()
-			// Warm the page cache so the first iteration doesn't skew.
-			if _, err := c.engine.Answer(ctx, "why is payments latency high?"); err != nil {
+		c := buildBenchCorpus(b, n)
+		ctx := context.Background()
+
+		// The "before" arm: same data, same engine wiring, candidate-scoped
+		// claim search hidden so cosineClaimScores must scan the whole table.
+		var corpusScans int
+		before := NewEngineWith(c.conn.Events.(eventLister), c.conn.Claims, c.conn.Relationships,
+			EngineDeps{
+				Embeddings:  corpusOnlyRepo{inner: c.conn.Embeddings, scans: &corpusScans},
+				EmbedClient: benchEmbedClient{model: "bench-model-384"},
+			})
+
+		b.Run(fmt.Sprintf("n=%d/corpus-scan", n), func(b *testing.B) {
+			if _, err := before.Answer(ctx, question); err != nil { // warm page cache
+				b.Fatalf("warmup: %v", err)
+			}
+			corpusScans = 0
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := before.Answer(ctx, question); err != nil {
+					b.Fatalf("answer: %v", err)
+				}
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(corpusScans)/float64(b.N), "tablescans/op")
+		})
+
+		b.Run(fmt.Sprintf("n=%d/candidate", n), func(b *testing.B) {
+			if _, err := c.engine.Answer(ctx, question); err != nil { // warm page cache
 				b.Fatalf("warmup: %v", err)
 			}
 			c.embeds.reset()
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if _, err := c.engine.Answer(ctx, "why is payments latency high?"); err != nil {
+				if _, err := c.engine.Answer(ctx, question); err != nil {
 					b.Fatalf("answer: %v", err)
 				}
 			}
@@ -323,5 +358,6 @@ func BenchmarkRecallLegs_SQLite(b *testing.B) {
 		}
 		b.StopTimer()
 		b.ReportMetric(float64(c.embeds.vectorsMaterialised)/float64(b.N), "vectors/op")
+		b.ReportMetric(float64(c.embeds.searchCalls)/float64(b.N), "vsearch/op")
 	})
 }

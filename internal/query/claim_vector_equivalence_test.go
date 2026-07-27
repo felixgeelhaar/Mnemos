@@ -45,7 +45,6 @@ type equivFixture struct {
 	corpus      Engine
 	claims      []domain.Claim
 	corpusScans int
-	fastScans   int
 }
 
 func newEquivFixture(tb testing.TB, n int, model string) *equivFixture {
