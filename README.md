@@ -29,12 +29,14 @@ That's it. Your agent now remembers your decisions, the bug you fixed last month
 No SDK to install. Any language with an HTTP client works. Below is Python; substitute `curl`, `fetch`, `reqwest`, etc.
 
 ```python
-import httpx, uuid
+import httpx, os, uuid
 m = "http://localhost:7777"
 run = str(uuid.uuid4())
+# Every /v1/* call needs a bearer token — reads included (see "Authentication").
+h = {"Authorization": f"Bearer {os.environ['MNEMOS_JWT']}"}
 
 # Remember something
-httpx.post(f"{m}/v1/events", json={"events": [{
+httpx.post(f"{m}/v1/episodes", headers=h, json={"episodes": [{
     "id": str(uuid.uuid4()),
     "run_id": run,
     "source_input_id": "chat-session-1",
@@ -44,7 +46,7 @@ httpx.post(f"{m}/v1/events", json={"events": [{
 }]})
 
 # Recall it later (months later, same call)
-events = httpx.get(f"{m}/v1/events", params={"run_id": run}).json()
+episodes = httpx.get(f"{m}/v1/episodes", headers=h, params={"run_id": run}).json()
 ```
 
 That's the whole API for the simple case. For richer memory — typed claims, contradiction detection, evidence-back-to-source — keep reading.
@@ -129,12 +131,19 @@ the **cognitive layer** (tiers 0–4) so an out-of-process agent gets the brain,
 a bucket — at parity with the HTTP and gRPC transports:
 
 - **Connected brain** — `who_knows`, `knowledge_gaps`, `calibration`,
-  `hypercorrections`, `recombinations`, `analogous_claims`
-- **Claims + advanced recall** — `get_claim`, `classify`, `get_decision`,
+  `hypercorrections`, `recombinations`, `analogous_beliefs`
+- **Claims + advanced recall** — `get_belief`, `classify`, `get_decision`,
   `recall` (`mode` = sufficiency | effort | context | conflicts | iterative)
 - **Working memory + skill/temporal loops** — `get_blocks`, `set_block`,
-  `signals`, `record_action`, `record_outcome`, `synthesize_lessons`,
-  `synthesize_playbooks`, `timeline_query`
+  `signals`, `record_action`, `record_outcome`, `synthesize_schemas`,
+  `synthesize_reflexes`, `timeline_query`
+
+(The brain-native tool names landed in v0.85.0: `list_claims` → `list_beliefs`,
+`get_claim` → `get_belief`, `analogous_claims` → `analogous_beliefs`,
+`synthesize_lessons` → `synthesize_schemas`, `query_lessons` → `query_schemas`,
+`synthesize_playbooks` → `synthesize_reflexes`, `query_playbook` →
+`query_reflex`, `memory_resolve_contradiction` → `memory_resolve_dissonance`.
+The old names are gone, not aliased.)
 
 ### Wrap a LangGraph / CrewAI / MCP agent for audit + replay
 
@@ -149,7 +158,8 @@ pip install -r requirements.txt
 python agent.py --customer-id CUST-42 --amount 245.00
 
 # Replay the exact decision chain
-curl -s "http://localhost:7777/v1/events?run_id=<run-id>" | jq
+curl -s -H "Authorization: Bearer $MNEMOS_JWT" \
+  "http://localhost:7777/v1/episodes?run_id=<run-id>" | jq
 ```
 
 The example uses raw HTTP (no SDK), so you can see the four lines per
@@ -303,24 +313,69 @@ Every claim carries a status: `active`, `contested`, `resolved`, or `deprecated`
 
 `mnemos serve` exposes the local knowledge base as a small HTTP API so other tools, dashboards, or scripts can read and write without speaking SQLite. Cross-project federation and namespace scoping land in subsequent commits.
 
-| Endpoint | Method | Description |
+Since **v0.85.0** the wire speaks the brain vocabulary (ADR 0011): the
+resources are `episodes`, `beliefs` and `associations`. `/v1/events`,
+`/v1/claims` and `/v1/relationships` were renamed in place — they 404 now,
+and there is no compatibility alias. The old additive `/v2` layer was retired
+in the same release (folded into v1).
+
+Auth column: **anon** = never needs a token; **JWT** = bearer token required
+by default (see "Authentication" below).
+
+| Endpoint | Method | Auth | Description |
+|---|---|---|---|
+| `/health`, `/healthz` | GET | anon | Bare liveness `200` (no version/db/tenant data) |
+| `/`, `/app` | GET | anon | Marketing landing page / registry SPA shell |
+| `/internal/ready` | GET | JWT | Readiness: version + DB write probe |
+| `/internal/metrics` | GET | JWT | Prometheus RED metrics (`serve --metrics-public` to open) |
+| `/v1/episodes` | GET | JWT | List episodes (`?run_id`, `?limit`, `?offset`) |
+| `/v1/episodes` | POST | JWT `events:write` | Append a batch — body `{"episodes":[…]}` |
+| `/v1/beliefs` | GET | JWT | List beliefs (`?type=fact\|hypothesis\|decision`, `?status=active\|contested\|resolved\|deprecated`, `?as_of`, `?recorded_as_of`, `?run_id`, `?similar_to`, `?limit`, `?offset`) |
+| `/v1/beliefs` | POST | JWT `claims:write` | Upsert a batch — body `{"beliefs":[…],"evidence":[…]}` |
+| `/v1/beliefs` | DELETE | JWT `claims:write` | Right-to-be-forgotten purge for one `?run_id` |
+| `/v1/beliefs/{id}` | GET | JWT | Single belief, full detail |
+| `/v1/beliefs/{id}/{sub}` | GET/POST | JWT | `lifecycle`, `provenance`, `export.md`, `feedback`, `history`, `expectation`, `observation`, `analogous` |
+| `/v1/associations` | GET | JWT | List edges (`?type=supports\|contradicts\|…`, `?limit`, `?offset`) |
+| `/v1/associations` | POST | JWT `relationships:write` | Upsert a batch — body `{"associations":[…]}` |
+| `/v1/embeddings` | GET | JWT | List embeddings (`?entity_type=event\|claim`, `?limit`, `?offset`) |
+| `/v1/embeddings` | POST | JWT `embeddings:write` | Upsert a batch (vector as JSON float array) |
+| `/v1/metrics` | GET | JWT | Counts mirroring `mnemos metrics` |
+| `/v1/schemas` | GET | JWT | Promoted schemas (neocortex read) |
+| `/v1/process` | POST | JWT `claims:write` | Run ingest→extract→relate on raw text |
+| `/v1/search` | GET POST | JWT | Hybrid retrieval over the belief store |
+| `/v1/context` | GET POST | JWT | Render the Context Block for a run |
+| `/v1/recall` | GET | JWT | Advanced recall (`?mode=sufficiency\|effort\|context\|conflicts\|iterative`) |
+| `/v1/classify` | GET | JWT | Novelty verdict for a candidate statement (`?text`) |
+| `/v1/decisions`, `/v1/decisions/{id}` | GET | JWT | Browse recorded decisions |
+| `/v1/blocks` | GET POST | JWT (`claims:write` on POST) | Working-memory blocks |
+| `/v1/actions` | POST | JWT `claims:write` | Record an action; `/v1/actions/{id}/outcome` records its result |
+| `/v1/synthesize` | POST | JWT `claims:write` | Derive schemas + reflexes |
+| `/v1/timeline`, `/v1/signals` | GET | JWT | Temporal timeline and detected patterns |
+| `/v1/who-knows`, `/v1/knowledge-gaps`, `/v1/calibration`, `/v1/hypercorrections`, `/v1/recombinations` | GET | JWT | Connected-brain reads |
+| `/v1/incidents`, `/v1/incidents/{id}[/resolve\|/why-wrong]` | GET POST | JWT | Incident records and post-mortem analysis |
+| `/v1/federation/export` | GET | JWT | Anonymized reflex export. Returns `501` unless `MNEMOS_FEDERATION_ENABLED=true` |
+| `/v1/leads` | POST | anon | Rate-limited lead-capture form on the landing page |
+
+Defaults: `limit=50`, capped at `200`. Port also accepts `MNEMOS_SERVE_PORT`. Request bodies cap at 5 MB, 1000 records per batch. Successful appends return `201 Created` with `{"accepted":n}`.
+
+**Web UI.** `mnemos serve` also serves a minimal single-page UI at `GET /app` (the marketing landing page is at `GET /`). It renders the metrics, paginated beliefs (with type/status filters), and the dissonance list by hitting the same `/v1/*` endpoints above. The shell HTML is anonymous; the data calls it makes are authenticated like any other `/v1/*` request. The HTML is embedded via `//go:embed` so there's no separate deploy step — one binary, one port.
+
+**Authentication — secure by default since v0.85.1.** *Every* data endpoint requires a JWT bearer token issued by the same `mnemos serve` instance: `Authorization: Bearer <jwt>`. **Reads are not open.** A tokenless `GET /v1/beliefs` gets `401`, exactly like a `POST`.
+
+Only these routes are anonymous, and none of them exposes knowledge: `/health` and `/healthz` (bare liveness `200`s — no version, DB or tenant data), `/` (marketing landing), `/app` (SPA shell), and the rate-limited `POST /v1/leads` form on the landing page.
+
+Two explicit opt-outs, both off by default:
+
+| Flag | Env | Effect |
 |---|---|---|
-| `/health` | GET | Liveness probe + version |
-| `/v1/events` | GET | List events (`?limit`, `?offset`) |
-| `/v1/events` | POST | Append a batch of events |
-| `/v1/claims` | GET | List claims (`?type=fact\|hypothesis\|decision`, `?status=active\|contested\|resolved\|deprecated`, `?limit`, `?offset`) |
-| `/v1/claims` | POST | Upsert a batch of claims (with optional `evidence` links) |
-| `/v1/relationships` | GET | List relationships (`?type=supports\|contradicts`, `?limit`, `?offset`) |
-| `/v1/relationships` | POST | Upsert a batch of relationships |
-| `/v1/embeddings` | GET | List embeddings (`?entity_type=event\|claim`, `?limit`, `?offset`) |
-| `/v1/embeddings` | POST | Upsert a batch of embeddings (vector as JSON float array) |
-| `/v1/metrics` | GET | Counts mirroring `mnemos metrics` |
+| `serve --public-reads` | `MNEMOS_PUBLIC_READS` | Anonymous `GET`/`HEAD`/`OPTIONS` on the data API. Prints a warning at boot. Ignored under `--require-tenant` (there is no anonymous tenant). |
+| `serve --metrics-public` | `MNEMOS_METRICS_PUBLIC` | Anonymous `GET /internal/metrics` for a scrape on a trusted network. Deliberately **not** covered by `--public-reads`, so a public read API can never leak the RED series. |
 
-Defaults: `limit=50`, capped at `200`. Port also accepts `MNEMOS_SERVE_PORT`. Request bodies cap at 5 MB.
+`/internal/metrics` and the readiness probe `/internal/ready` (version + DB write check) are authenticated by default; `/internal/ready` has no public opt-out.
 
-**Web UI.** `mnemos serve` also serves a minimal single-page UI at `GET /`. It renders the metrics, paginated claims (with type/status filters), and the contradiction list by hitting the same `/v1/*` endpoints above. The HTML is embedded via `//go:embed` so there's no separate deploy step — one binary, one port.
+Writes additionally check the token's `scp` claim (`events:write`, `claims:write`, `relationships:write`, `embeddings:write`, `promote:global`, or `*`) — see the Auth column above. The same per-tool scope gate applies to `mnemos mcp --http`.
 
-**Authentication.** All write methods (POST/PUT/DELETE) require a JWT bearer token issued by the same `mnemos serve` instance: `Authorization: Bearer <jwt>`. Reads stay open by default — useful for browse-only dashboards. The signing key comes from `MNEMOS_JWT_SECRET` (hex-encoded, ≥ 32 bytes) or `MNEMOS_AUTH_DIR/jwt-secret` (auto-created on first boot, 0600). Issue tokens with `mnemos token issue`; revoke with `mnemos token revoke`. With no verifier configured, the registry is fully open (suitable for local dev and trusted networks).
+The signing key comes from `MNEMOS_JWT_SECRET` (hex-encoded, ≥ 32 bytes) or `MNEMOS_AUTH_DIR/jwt-secret` (auto-created on first boot, 0600); boot fails loudly if neither resolves. Issue tokens with `mnemos token issue`; revoke with `mnemos token revoke`.
 
 The client-side `MNEMOS_REGISTRY_TOKEN` (used by `mnemos push` / `mnemos pull` to talk to a *remote* registry) is unrelated to inbound HTTP auth — see "Push / Pull" below.
 
@@ -328,7 +383,7 @@ Full HTTP schema: [`api/openapi.yaml`](api/openapi.yaml).
 
 ### gRPC (alongside HTTP)
 
-`mnemos serve --grpc-port 7778` exposes the same registry surface over gRPC for typed, streaming-capable clients. Schema: [`proto/mnemos/v1/mnemos.proto`](proto/mnemos/v1/mnemos.proto). The service mirrors HTTP and covers Phase 2-7 entities: `ListEvents/AppendEvents`, `ListClaims/AppendClaims`, `ListRelationships/AppendRelationships`, `ListEmbeddings/AppendEmbeddings`, `Metrics`, plus `List*/Append*` for `Actions`, `Outcomes`, `Lessons`, `Decisions`, `Playbooks`, `EntityRelationships`. It also carries the full **cognitive layer** at parity with HTTP and MCP: `WhoKnows`, `KnowledgeGaps`, `Calibration`, `Hypercorrections`, `Recombinations`, `AnalogousClaims`, `Get`, `ClassifyClaim`, `GetDecision`, `SetClaimLifecycle`, `Recall*` (sufficiency/effort/context/conflicts/iterative), `GetBlocks`, `SetBlock`, `Synthesize`, `Timeline`, and `Signals`. Auth uses the JWT verifier (`MNEMOS_JWT_SECRET` or `MNEMOS_AUTH_DIR`); send `authorization: Bearer <jwt>` metadata. With no verifier configured, auth is disabled — appropriate for local development only.
+`mnemos serve --grpc-port 7778` exposes the same registry surface over gRPC for typed, streaming-capable clients. Schema: [`proto/mnemos/v1/mnemos.proto`](proto/mnemos/v1/mnemos.proto), service `mnemos.v1.MnemosService`. The service mirrors HTTP and covers Phase 2-7 entities: `Health`, `ListEpisodes/AppendEpisodes`, `ListBeliefs/AppendBeliefs`, `ListAssociations/AppendAssociations`, `ListEmbeddings/AppendEmbeddings`, `Metrics`, plus `List*/Append*` for `Actions`, `Outcomes`, `Schemas`, `Decisions`, `Reflexes`, `EntityAssociations`. It also carries the full **cognitive layer** at parity with HTTP and MCP: `WhoKnows`, `KnowledgeGaps`, `Calibration`, `Hypercorrections`, `Recombinations`, `AnalogousBeliefs`, `GetBelief`, `Classify`, `GetDecision`, `SetBeliefLifecycle`, `Recall` (`mode` = sufficiency/effort/context/conflicts/iterative), `GetBlocks`, `SetBlock`, `Synthesize`, `Timeline`, and `Signals`. (These names were also renamed in v0.85.0: `ListEvents` → `ListEpisodes`, `ListClaims` → `ListBeliefs`, `ListRelationships` → `ListAssociations`, `Lessons` → `Schemas`, `Playbooks` → `Reflexes`, `AnalogousClaims` → `AnalogousBeliefs`, `ClassifyClaim` → `Classify`, `SetClaimLifecycle` → `SetBeliefLifecycle`.) Auth uses the JWT verifier (`MNEMOS_JWT_SECRET` or `MNEMOS_AUTH_DIR`); send `authorization: Bearer <jwt>` metadata. Like REST, reads require a token by default; `serve --public-reads` opts into anonymous read RPCs.
 
 Surface parity across the three transports (MCP tools ↔ HTTP routes ↔ gRPC methods) is guarded by `TestAPISurfaceParity` (`cmd/mnemos/api_parity_test.go`): the build fails if a handler is added to one transport without recording the deliberate presence/absence on the others.
 
@@ -404,25 +459,32 @@ Resource accessors (`Events()`, `Claims()`, `Relationships()`, `Embeddings()`) r
 **Any other language (curl)**:
 
 ```bash
-# Append an event
-curl -X POST http://localhost:7777/v1/events \
+# Append an episode (id, content, source_input_id and timestamp are required)
+curl -X POST http://localhost:7777/v1/episodes \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <optional-token>' \
-  -d '{"events":[{"id":"ev_1","content":"...","timestamp":"2026-04-19T10:00:00Z"}]}'
+  -H "Authorization: Bearer $MNEMOS_JWT" \
+  -d '{"episodes":[{"id":"ev_1","run_id":"run_1","source_input_id":"cli","content":"...","timestamp":"2026-04-19T10:00:00Z"}]}'
 
-# Browse claims, filtered
-curl 'http://localhost:7777/v1/claims?type=decision&limit=25'
+# Browse beliefs, filtered — the token is required for reads too
+curl -H "Authorization: Bearer $MNEMOS_JWT" \
+  'http://localhost:7777/v1/beliefs?type=decision&limit=25'
 ```
 
 **Python (stdlib)**:
 
 ```python
-import json, urllib.request
+import json, os, urllib.request
 
 req = urllib.request.Request(
-    "http://localhost:7777/v1/events",
-    data=json.dumps({"events": [{"id": "ev_1", "content": "...", "timestamp": "2026-04-19T10:00:00Z"}]}).encode(),
-    headers={"Content-Type": "application/json", "Authorization": "Bearer <token>"},
+    "http://localhost:7777/v1/episodes",
+    data=json.dumps({"episodes": [{
+        "id": "ev_1", "run_id": "run_1", "source_input_id": "script",
+        "content": "...", "timestamp": "2026-04-19T10:00:00Z",
+    }]}).encode(),
+    headers={
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {os.environ['MNEMOS_JWT']}",
+    },
 )
 urllib.request.urlopen(req)
 ```

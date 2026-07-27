@@ -1,17 +1,20 @@
 """Refund-triage agent — LangGraph + Mnemos audit demo.
 
 A 4-node LangGraph agent decides whether to auto-approve, escalate, or
-deny a refund request. Each node emits a Mnemos event keyed to a single
+deny a refund request. Each node emits a Mnemos episode keyed to a single
 run_id so the full reasoning chain is replayable from
-GET /v1/events?run_id=<run-id>.
+GET /v1/episodes?run_id=<run-id>.
 
 Run:
+    mnemos token issue --user <id>        # every /v1/* call needs one
+    export MNEMOS_JWT=<token>
     pip install -r requirements.txt
     python agent.py --customer-id CUST-42 --amount 245.00
 
 The script exits with the run_id printed; pass it back into Mnemos to
 replay:
-    curl -s 'http://localhost:7777/v1/events?run_id=<run-id>' | jq
+    curl -s -H "Authorization: Bearer $MNEMOS_JWT" \
+      'http://localhost:7777/v1/episodes?run_id=<run-id>' | jq
 
 Set ANTHROPIC_API_KEY for real LLM-driven decisions; without it the
 agent falls back to a deterministic scripted decision (clearly marked
@@ -33,7 +36,9 @@ import httpx
 from langgraph.graph import END, StateGraph
 
 MNEMOS_URL = os.environ.get("MNEMOS_URL", "http://localhost:7777")
-MNEMOS_TOKEN = os.environ.get("MNEMOS_JWT")  # optional; required if Mnemos has auth on
+# `mnemos serve` is secure by default since v0.85.1: every /v1/* call needs a
+# bearer token, READS INCLUDED. Mint one with `mnemos token issue --user <id>`.
+MNEMOS_TOKEN = os.environ.get("MNEMOS_JWT")
 
 
 class State(TypedDict, total=False):
@@ -66,7 +71,7 @@ class MnemosClient:
         content: str,
         metadata: dict[str, Any],
     ) -> str:
-        # Mnemos's events.metadata accepts map[string]string, so JSON-
+        # Mnemos's episode metadata accepts map[string]string, so JSON-
         # stringify any non-string value. Replay tooling unmarshals on
         # read.
         flat: dict[str, str] = {}
@@ -74,8 +79,10 @@ class MnemosClient:
             flat[k] = v if isinstance(v, str) else json.dumps(v, default=str)
 
         event_id = str(uuid.uuid4())
+        # The resource is `episodes` (renamed from `events` in v0.85.0), and
+        # the server rejects unknown JSON fields — the wrapper key must match.
         body = {
-            "events": [
+            "episodes": [
                 {
                     "id": event_id,
                     "run_id": run_id,
@@ -87,19 +94,19 @@ class MnemosClient:
             ]
         }
         r = self._client.post(
-            f"{self.base_url}/v1/events", headers=self._headers(), json=body
+            f"{self.base_url}/v1/episodes", headers=self._headers(), json=body
         )
         r.raise_for_status()
         return event_id
 
     def list_events(self, run_id: str) -> list[dict[str, Any]]:
         r = self._client.get(
-            f"{self.base_url}/v1/events",
+            f"{self.base_url}/v1/episodes",
             headers=self._headers(),
             params={"run_id": run_id, "limit": 200},
         )
         r.raise_for_status()
-        return r.json().get("events", [])
+        return r.json().get("episodes", [])
 
 
 # ---------- Mock data layer (replace with real lookups in production) ----------
@@ -334,6 +341,14 @@ def main():
         "amount": args.amount,
     }
 
+    if not MNEMOS_TOKEN:
+        print(
+            "warning: MNEMOS_JWT is unset. `mnemos serve` requires a bearer "
+            "token on every /v1/* call (reads included) unless it was started "
+            "with --public-reads; expect 401s.",
+            file=sys.stderr,
+        )
+
     print(f"run_id: {run_id}", file=sys.stderr)
     graph = build_graph()
     final = graph.invoke(initial)
@@ -342,7 +357,7 @@ def main():
         "run_id": run_id,
         "decision": final["decision"]["outcome"],
         "action": final["action"]["kind"],
-        "replay": f"{args.mnemos_url}/v1/events?run_id={run_id}",
+        "replay": f"{args.mnemos_url}/v1/episodes?run_id={run_id}",
     }, indent=2))
 
 
