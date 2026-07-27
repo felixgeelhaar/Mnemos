@@ -1,4 +1,14 @@
-package main
+// Package runscope enforces the F.4.b run-scoped token boundary: a bearer
+// restricted to a set of run ids must not read or write across that boundary
+// via evidence links.
+//
+// It lives here, rather than beside the HTTP handlers, because the check has to
+// be identical on every transport that accepts evidence. It was package-private
+// to cmd/mnemos, so gRPC AppendBeliefs could not call it and returned
+// Unimplemented instead — fail-closed and honest, but a capability REST had and
+// gRPC did not. A security check that exists on one transport is a security
+// check someone will route around.
+package runscope
 
 import (
 	"context"
@@ -6,7 +16,7 @@ import (
 	"go.klarlabs.de/mnemos/internal/store"
 )
 
-// checkEventRunsAllowed returns ("", nil) when every supplied event
+// CheckEventRunsAllowed returns ("", nil) when every supplied event
 // id maps to a run_id present in the allowed whitelist, otherwise
 // it returns the first offending (eventID, runID) pair.
 //
@@ -17,7 +27,7 @@ import (
 //
 // Backend-agnostic: uses conn.Events.ListByIDs through the registry
 // instead of raw SQL.
-func checkEventRunsAllowed(ctx context.Context, conn *store.Conn, eventIDs []string, allowed []string) (badEventID, badRunID string, err error) {
+func CheckEventRunsAllowed(ctx context.Context, conn *store.Conn, eventIDs []string, allowed []string) (badEventID, badRunID string, err error) {
 	if len(allowed) == 0 || len(eventIDs) == 0 {
 		return "", "", nil
 	}
@@ -56,11 +66,11 @@ func checkEventRunsAllowed(ctx context.Context, conn *store.Conn, eventIDs []str
 	return "", "", nil
 }
 
-// claimEventIDs returns the de-duplicated set of event ids that the
+// ClaimEventIDs returns the de-duplicated set of event ids that the
 // given claim ids are linked to via claim_evidence. Used to derive
 // the run-id surface for run-scope enforcement on relationship and
 // embedding writes that reference claims rather than events directly.
-func claimEventIDs(ctx context.Context, conn *store.Conn, claimIDs []string) ([]string, error) {
+func ClaimEventIDs(ctx context.Context, conn *store.Conn, claimIDs []string) ([]string, error) {
 	if len(claimIDs) == 0 {
 		return nil, nil
 	}

@@ -144,7 +144,7 @@ func PersistArtifacts(ctx context.Context, conn *store.Conn, events []domain.Eve
 	// a timeline entry — never drops knowledge. This is why it does NOT route
 	// (drop) the belief: a rule-based classifier is ~78% precise, which is fine
 	// for a low-cost tag but unsafe for a destructive route.
-	if EnableEpisodicTagging {
+	if episodicTaggingEnabled() {
 		tagEventEpisodes(events, claims, links)
 	}
 
@@ -543,12 +543,37 @@ func GenerateClaimEmbeddings(ctx context.Context, conn *store.Conn, claims []dom
 	return len(vectors), nil
 }
 
-// EnableEpisodicTagging turns on additive operational-event typing in
-// PersistArtifacts (ADR 0023 part 2). Off by default: the classifier is
-// rule-based (~78% precision), which is safe for an additive tag but not
-// something to impose on every install without opt-in. cmd/mnemos sets it from
-// MNEMOS_EPISODIC_EVENTS.
+// EnableEpisodicTagging forces additive operational-event typing on
+// (ADR 0023 part 2), regardless of the environment. Prefer the
+// MNEMOS_EPISODIC_EVENTS variable; this exists for callers that configure
+// programmatically rather than through the environment.
+//
+// Off by default: the classifier is rule-based (~78% precision), which is safe
+// for an additive tag but not something to impose on every install.
 var EnableEpisodicTagging bool
+
+// episodicTaggingEnabled reports whether to tag episodes on this write.
+//
+// The environment is read HERE rather than assigned into the package var by an
+// entrypoint. It used to be set in exactly one place — cmd/mnemos/main.go — so
+// the embedded library ignored MNEMOS_EPISODIC_EVENTS entirely: senat-os and
+// pet-medical could export it and get nothing, with no error and no symptom
+// beyond timeline_query returning fewer typed episodes than it should.
+//
+// A package-level var that only one entrypoint assigns is a feature reachable
+// from one entrypoint.
+func episodicTaggingEnabled() bool {
+	if EnableEpisodicTagging {
+		return true
+	}
+
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MNEMOS_EPISODIC_EVENTS"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
 
 // tagEventEpisodes sets event_type on the source events of claims classified as
 // operational events, so timeline_query surfaces them as typed episodes. It

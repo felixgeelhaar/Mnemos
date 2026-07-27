@@ -41,8 +41,18 @@ type CredibilityInputs struct {
 
 // Signal weights. Single source of truth for both ScoreCredibility (the
 // numeric output) and BuildReport (the structured per-signal breakdown).
-// Weights sum to 1.0 across the additive signals; AgentAuthority applies
-// multiplicatively after the weighted sum.
+// Weights sum to 1.0 across the additive signals for a TEST claim;
+// AgentAuthority applies multiplicatively after the weighted sum.
+//
+// wTest is the odd one out: test_decisiveness is only defined for test_result
+// claims. For everything else the signal does not exist, so it is EXCLUDED
+// from the sum and the remaining five weights are renormalised to 1.0 (see
+// nonTestWeightScale). It used to be included unconditionally at a "neutral"
+// 0.5 while being reported in the signals breakdown only for tests, which had
+// two visible consequences: `mnemos why-trust <fact>` listed contributions
+// summing to score−0.035, and a non-test claim with every signal maxed capped
+// at 0.965 instead of 1.0. For an ADDITIVE term there is no neutral value —
+// neutral means absent.
 const (
 	wBase      = 0.50
 	wAuthority = 0.15
@@ -51,6 +61,25 @@ const (
 	wLiveness  = 0.05
 	wTest      = 0.07
 )
+
+// nonTestWeightScale renormalises the five always-present weights to sum to 1.0
+// when test_decisiveness is excluded, so a non-test claim with perfect signals
+// scores exactly 1.0 and its reported contributions sum to its score.
+const nonTestWeightScale = 1.0 / (wBase + wAuthority + wCitation + wRecency + wLiveness)
+
+// signalWeights returns the additive weights in effect for a claim. Tests keep
+// the declared weights (which already sum to 1.0 with wTest); non-tests get the
+// five remaining weights, renormalised.
+func signalWeights(isTest bool) (base, authority, citation, recency, liveness float64) {
+	if isTest {
+		return wBase, wAuthority, wCitation, wRecency, wLiveness
+	}
+	return wBase * nonTestWeightScale,
+		wAuthority * nonTestWeightScale,
+		wCitation * nonTestWeightScale,
+		wRecency * nonTestWeightScale,
+		wLiveness * nonTestWeightScale
+}
 
 // BuildReport computes score, structured per-signal breakdown, a
 // compact rationale string, and a plain-English prose rationale from
@@ -100,8 +129,9 @@ func BuildReport(in CredibilityInputs) (score float64, signals []domain.Provenan
 	livenessSignal := livenessWeight(in.Liveness)
 
 	// Test decisiveness: |pass-fail|/total. 50/50 → 0 (flaky); 10/0 → 1.
-	// Only contributes for test claims; non-tests get 0.5 (neutral).
-	testDecisiveness := 0.5
+	// Only defined for test claims — for anything else the signal is absent
+	// from both the sum and the breakdown (see the wTest comment).
+	testDecisiveness := 0.0
 	if in.IsTest {
 		total := in.TestPassCount + in.TestFailCount
 		if total > 0 {
@@ -110,17 +140,19 @@ func BuildReport(in CredibilityInputs) (score float64, signals []domain.Provenan
 				diff = -diff
 			}
 			testDecisiveness = float64(diff) / float64(total)
-		} else {
-			testDecisiveness = 0
 		}
 	}
 
-	weightedSum := base*wBase +
-		authority*wAuthority +
-		citationSignal*wCitation +
-		recencySignal*wRecency +
-		livenessSignal*wLiveness +
-		testDecisiveness*wTest
+	wb, wa, wc, wr, wl := signalWeights(in.IsTest)
+
+	weightedSum := base*wb +
+		authority*wa +
+		citationSignal*wc +
+		recencySignal*wr +
+		livenessSignal*wl
+	if in.IsTest {
+		weightedSum += testDecisiveness * wTest
+	}
 
 	// AgentAuthority is a multiplicative final factor: an agent with a
 	// known poor track record (low AuthorityScore) deflates the score;
@@ -135,36 +167,36 @@ func BuildReport(in CredibilityInputs) (score float64, signals []domain.Provenan
 		{
 			Name:         "base_trust",
 			Value:        base,
-			Weight:       wBase,
-			Contribution: base * wBase,
+			Weight:       wb,
+			Contribution: base * wb,
 			Detail:       fmt.Sprintf("stored trust score %.2f (0.5 when unset)", in.CurrentTrust),
 		},
 		{
 			Name:         "authority",
 			Value:        authority,
-			Weight:       wAuthority,
-			Contribution: authority * wAuthority,
+			Weight:       wa,
+			Contribution: authority * wa,
 			Detail:       fmt.Sprintf("source authority %.2f (0.5 when unset)", in.SourceAuthority),
 		},
 		{
 			Name:         "citations",
 			Value:        citationSignal,
-			Weight:       wCitation,
-			Contribution: citationSignal * wCitation,
+			Weight:       wc,
+			Contribution: citationSignal * wc,
 			Detail:       fmt.Sprintf("%d citation(s)", in.CitationCount),
 		},
 		{
 			Name:         "recency",
 			Value:        recencySignal,
-			Weight:       wRecency,
-			Contribution: recencySignal * wRecency,
+			Weight:       wr,
+			Contribution: recencySignal * wr,
 			Detail:       recencyDetail(ref, now),
 		},
 		{
 			Name:         "liveness",
 			Value:        livenessSignal,
-			Weight:       wLiveness,
-			Contribution: livenessSignal * wLiveness,
+			Weight:       wl,
+			Contribution: livenessSignal * wl,
 			Detail:       string(in.Liveness),
 		},
 	}

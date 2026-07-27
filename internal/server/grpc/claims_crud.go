@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	mnemos "go.klarlabs.de/mnemos"
+	"go.klarlabs.de/mnemos/internal/domain"
 	mnemosv1 "go.klarlabs.de/mnemos/proto/gen/mnemos/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -48,7 +49,14 @@ func (s *Server) GetBelief(ctx context.Context, req *mnemosv1.GetBeliefRequest) 
 }
 
 // SetBeliefLifecycle transitions a belief's lifecycle.
+//
+// The scope guard comes before the availability check on purpose: a caller
+// without claims:write should not learn from the error code whether this
+// deployment has a brain attached.
 func (s *Server) SetBeliefLifecycle(ctx context.Context, req *mnemosv1.SetBeliefLifecycleRequest) (*mnemosv1.SetBeliefLifecycleResponse, error) {
+	if err := s.requireScope(ctx, domain.ScopeClaimsWrite); err != nil {
+		return nil, err
+	}
 	if s.memFor(ctx) == nil {
 		return nil, s.brainUnavailable()
 	}
