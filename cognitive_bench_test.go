@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -282,6 +283,22 @@ var censusSizes = []int{1000, 10000, 50000}
 
 func censusEnabled() bool { return os.Getenv("MNEMOS_CENSUS") == "1" }
 
+// censusWants filters the probe list via MNEMOS_CENSUS_PROBES (comma-separated).
+// Empty means "all". The unbounded 50k Recombinations pass runs for tens of
+// minutes, so the baseline measurement has to be able to ask for it alone.
+func censusWants(name string) bool {
+	want := os.Getenv("MNEMOS_CENSUS_PROBES")
+	if want == "" {
+		return true
+	}
+	for _, w := range strings.Split(want, ",") {
+		if strings.TrimSpace(w) == name {
+			return true
+		}
+	}
+	return false
+}
+
 // TestCognitiveCensus prints the per-endpoint cost table. It is skipped in
 // -short mode and under a normal `go test` run (it needs -run and CENSUS=1)
 // because the 50k Recombinations pass is deliberately expensive.
@@ -321,6 +338,9 @@ func TestCognitiveCensus(t *testing.T) {
 				}},
 			}
 			for _, p := range probes {
+				if !censusWants(p.name) {
+					continue
+				}
 				start := counts.total()
 				var got int
 				d := benchMinOf(1, func() { got = p.run() })
