@@ -128,6 +128,12 @@ type benchCorpus struct {
 // evidence) and 2n embeddings into a throwaway SQLite file, then wires the
 // engine exactly as NewEngineWith does in production.
 func buildBenchCorpus(tb testing.TB, n int) *benchCorpus {
+	return buildBenchCorpusWithModel(tb, n, "bench-model-384")
+}
+
+// buildBenchCorpusWithModel is buildBenchCorpus with the embedding model id
+// under caller control, so a test can write one model space and query another.
+func buildBenchCorpusWithModel(tb testing.TB, n int, model string) *benchCorpus {
 	tb.Helper()
 	ctx := context.Background()
 
@@ -143,7 +149,6 @@ func buildBenchCorpus(tb testing.TB, n int) *benchCorpus {
 	}
 	tb.Cleanup(func() { _ = conn.Close() })
 
-	const model = "bench-model-384"
 	now := time.Now().UTC()
 	topics := []string{
 		"payments latency", "auth token refresh", "database connection pool",

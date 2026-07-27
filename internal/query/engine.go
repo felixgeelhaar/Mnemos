@@ -40,6 +40,12 @@ type Engine struct {
 	// top-K candidate events by vector instead of loading the whole corpus
 	// with ListAll and cosining in Go.
 	eventVectorSearch ports.EventVectorSearcher
+	// claimVectorSearch is the candidate-scoped claim-similarity path. Set from
+	// embeddings when the backing store implements ClaimSimilaritySearcher —
+	// which sqlite, postgres, mysql and memory all do. When present, the claim
+	// re-ranker asks the store to score ONLY the admitted candidates instead of
+	// pulling the entire claim-embedding table into Go. See cosineClaimScores.
+	claimVectorSearch ports.ClaimSimilaritySearcher
 }
 
 // eventVectorTopK is how many candidate events the native vector path pulls
@@ -89,6 +95,9 @@ func (e Engine) WithEmbeddings(repo ports.EmbeddingRepository, client embedding.
 	// concrete repository, so no separate option or constructor arg exists.
 	if vs, ok := repo.(ports.EventVectorSearcher); ok {
 		e.eventVectorSearch = vs
+	}
+	if cs, ok := repo.(ports.ClaimSimilaritySearcher); ok {
+		e.claimVectorSearch = cs
 	}
 	return e
 }
@@ -1542,9 +1551,27 @@ func maxScore(m map[string]float64) float64 {
 }
 
 // cosineClaimScores mirrors cosineEventScores but for claim embeddings.
+//
+// Recall admits a handful of claims (those attached to the top-ranked events)
+// and then needs a cosine score for each. The whole-corpus form below answers
+// that by materialising EVERY stored claim vector — at 10k claims that is 10k
+// blob decodes and 56 MB of allocation to score five rows, on a path that runs
+// on every recall including the pgvector event fast-path. So when the store can
+// take a candidate allowlist (ClaimSimilaritySearcher: sqlite, postgres, mysql,
+// memory), ask it to score only the admitted ids; the corpus-wide path stays as
+// the fallback for stores and test doubles that can't.
+//
+// The two paths must agree exactly, not approximately — see
+// claimScoresByCandidate for how equivalence is preserved, and
+// TestCosineClaimScores_CandidatePathMatchesCorpusScan for the proof.
 func (e Engine) cosineClaimScores(ctx context.Context, question string, claims []domain.Claim) map[string]float64 {
 	if e.embeddings == nil || e.embedClient == nil || len(claims) == 0 {
 		return nil
+	}
+	if e.claimVectorSearch != nil {
+		if scores, ok := e.claimScoresByCandidate(ctx, question, claims); ok {
+			return scores
+		}
 	}
 	stored, err := e.embeddings.ListByEntityType(ctx, "claim")
 	if err != nil || len(stored) == 0 {
@@ -1587,6 +1614,71 @@ func (e Engine) cosineClaimScores(ctx context.Context, question string, claims [
 		out[cl.ID] = float64(sim)
 	}
 	return out
+}
+
+// claimVectorFloor is the minimum similarity the candidate-scoped claim search
+// accepts. Cosine is bounded to [-1, 1] and a NEGATIVE score is meaningful to
+// the ranker (rankClaimsByHybrid keeps it, and it sorts below a zero-signal
+// claim but above the -1 "no signal at all" sentinel), so the floor has to sit
+// below the whole range rather than at the conventional 0 — a 0 floor would
+// silently promote every anti-correlated claim to "unscored".
+var claimVectorFloor = math.Inf(-1)
+
+// claimScoresByCandidate scores exactly the admitted claims by handing their ids
+// to the store as an allowlist, instead of pulling the entire claim-embedding
+// table into Go. It reports ok=false when it cannot serve the query, so the
+// caller falls through to the corpus-wide scan and behaviour is unchanged.
+//
+// # EQUIVALENCE
+//
+// This must return the same map the corpus scan would, or recall ordering
+// changes silently — the one outcome a performance fix must never buy. Three
+// things make that hold:
+//
+//   - Same maths. Every ClaimSimilaritySearcher implementation decodes the same
+//     stored blob and calls the same embedding.CosineSimilarity.
+//   - Same model gate. The query embedder's model id is passed through, so a
+//     vector written by a different model is skipped exactly as the corpus path
+//     skips it. An empty model id disables the filter on both paths. Dropping
+//     this would turn recall's silent-empty on a model mismatch into a
+//     silent-WRONG, which is strictly worse.
+//   - Same range. topK=0 (no truncation) and a -Inf floor keep every scored
+//     candidate, including negative similarities.
+//
+// It is NOT an approximate-nearest-neighbour path: no index, no recall/latency
+// trade-off, no reordering. It is the identical scan with the rows the answer
+// cannot use removed before they are decoded.
+func (e Engine) claimScoresByCandidate(ctx context.Context, question string, claims []domain.Claim) (map[string]float64, bool) {
+	candidates := make(map[string]struct{}, len(claims))
+	for _, cl := range claims {
+		candidates[cl.ID] = struct{}{}
+	}
+	qVectors, err := e.embedClient.Embed(ctx, []string{question})
+	if err != nil || len(qVectors) == 0 {
+		return nil, false
+	}
+	hits, err := e.claimVectorSearch.SearchClaimsByVector(
+		ctx,
+		qVectors[0],
+		candidates,
+		embedding.ModelIDOf(e.embedClient),
+		0, // topK 0 = no truncation; the caller ranks the full candidate set
+		claimVectorFloor,
+	)
+	if err != nil {
+		return nil, false
+	}
+	if len(hits) == 0 {
+		// No candidate carries a usable vector in this model space. The corpus
+		// path answers "no cosine signal" (nil) here too, so return that rather
+		// than falling through to a whole-table scan that can only agree.
+		return nil, true
+	}
+	out := make(map[string]float64, len(hits))
+	for _, h := range hits {
+		out[h.ClaimID] = h.Similarity
+	}
+	return out, true
 }
 
 // bm25ClaimScores mirrors bm25EventScores but for the claims_fts index.
