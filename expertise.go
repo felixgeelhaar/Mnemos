@@ -3,7 +3,6 @@ package mnemos
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"unicode"
 )
@@ -61,14 +60,38 @@ func overlapFraction(query, claim map[string]struct{}) float64 {
 //
 // This ships a deterministic lexical baseline (token overlap); reusing the stored
 // claim embeddings for semantic topic centroids is the production enhancement.
+//
+// The result count is bounded by [MaxCognitiveResults]; use
+// [memory.WhoKnowsBounded] to learn whether the answer was truncated.
 func (m *memory) WhoKnows(ctx context.Context, query string, limit int) ([]Expert, error) {
+	rep, err := m.WhoKnowsBounded(ctx, query, limit)
+	return rep.Experts, err
+}
+
+// ExpertDefaultLimit is the expert count [Memory.WhoKnows] returns when the
+// caller names none.
+const ExpertDefaultLimit = 10
+
+// WhoKnowsBounded is [Memory.WhoKnows] reporting the bounds it applied (see
+// [BoundedCognition]).
+//
+// The scoring pass is a single linear sweep of the live corpus that AGGREGATES
+// into one row per author, so the answer size is bounded by the number of
+// distinct authors rather than by the corpus — measured at 33 ms per 10k claims.
+// It is not the resource-exhaustion vector the pairwise reads were, and the
+// sweep stays complete: an author's affinity is a sum over all their claims, so
+// scoring a prefix would silently misrank the experts. Only the response is
+// capped.
+func (m *memory) WhoKnowsBounded(ctx context.Context, query string, limit int) (ExpertReport, error) {
+	var bounds Bounds
+	limit = capLimit(&bounds, limit, ExpertDefaultLimit, MaxCognitiveResults)
 	q := tokenizeSet(query)
 	if len(q) == 0 {
-		return nil, nil
+		return ExpertReport{Bounds: bounds}, nil
 	}
 	all, err := m.conn.Claims.ListAll(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("mnemos: WhoKnows: list claims: %w", err)
+		return ExpertReport{}, fmt.Errorf("mnemos: WhoKnows: list claims: %w", err)
 	}
 	type agg struct {
 		affinity, trustSum float64
@@ -79,6 +102,8 @@ func (m *memory) WhoKnows(ctx context.Context, query string, limit int) ([]Exper
 		if !c.ValidTo.IsZero() {
 			continue // only currently-valid knowledge
 		}
+		bounds.Scanned++
+		bounds.Considered++
 		author := strings.TrimSpace(c.CreatedBy)
 		if author == "" || author == "<system>" {
 			continue // unattributed — no owner to route to
@@ -97,7 +122,7 @@ func (m *memory) WhoKnows(ctx context.Context, query string, limit int) ([]Exper
 		a.n++
 	}
 	if len(byAuthor) == 0 {
-		return nil, nil
+		return ExpertReport{Bounds: bounds}, nil
 	}
 	var maxAff float64
 	for _, a := range byAuthor {
@@ -118,18 +143,23 @@ func (m *memory) WhoKnows(ctx context.Context, query string, limit int) ([]Exper
 			ClaimCount:  a.n,
 		})
 	}
-	// Rank by affinity × reliability; affinity breaks ties (it's the primary
-	// signal, reliability refines it).
-	sort.SliceStable(experts, func(i, j int) bool {
-		si := experts[i].Affinity * experts[i].Reliability
-		sj := experts[j].Affinity * experts[j].Reliability
-		if si != sj {
-			return si > sj
+	bounds.Available = len(experts)
+	// Rank by affinity × reliability, THEN cut; affinity breaks ties (it's the
+	// primary signal, reliability refines it), then the worker name so equal-score
+	// directories are stable across map iteration order.
+	experts = topN(experts, limit, func(a, b Expert) bool {
+		sa, sb := a.Affinity*a.Reliability, b.Affinity*b.Reliability
+		if sa != sb {
+			return sa > sb
 		}
-		return experts[i].Affinity > experts[j].Affinity
+		if a.Affinity != b.Affinity {
+			return a.Affinity > b.Affinity
+		}
+		return a.Worker < b.Worker
 	})
-	if limit > 0 && len(experts) > limit {
-		experts = experts[:limit]
+	if bounds.Available > len(experts) {
+		bounds.cut(BoundReasonResultLimit)
 	}
-	return experts, nil
+	bounds.finish(len(experts))
+	return ExpertReport{Experts: experts, Bounds: bounds}, nil
 }

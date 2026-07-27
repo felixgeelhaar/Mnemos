@@ -228,3 +228,7 @@ func topN[T any](xs []T, n int, less func(a, b T) bool) []T {
 	}
 	return xs
 }
+
+// *memory implements the optional bounded-cognition capability. The assertion is
+// here rather than next to the reads so adding one cannot silently miss it.
+var _ BoundedCognition = (*memory)(nil)
