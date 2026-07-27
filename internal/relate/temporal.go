@@ -165,10 +165,16 @@ func aspectsConflict(a, b aspect) bool {
 // production text — claims often mix tenses ("we planned to ship and
 // shipped"). The lexicon-based heuristic targets the clearest cases.
 func detectTemporalDivergence(aText, bText string, aTokens, bTokens map[string]struct{}) bool {
-	return temporalDivergesPre(
-		classifyAspect(aText), anchorTokens(aTokens),
-		classifyAspect(bText), anchorTokens(bTokens),
-	)
+	aAspect := classifyAspect(aText)
+	bAspect := classifyAspect(bText)
+	// Bail before building the anchor sets, as the single-function version did.
+	// See the note on detectNumericDivergence: the wrapper is what the
+	// before/after benchmark measures, so its evaluation order has to stay
+	// faithful.
+	if !aspectsConflict(aAspect, bAspect) {
+		return false
+	}
+	return temporalDivergesPre(aAspect, anchorTokens(aTokens), bAspect, anchorTokens(bTokens))
 }
 
 // temporalDivergesPre is detectTemporalDivergence with the per-claim

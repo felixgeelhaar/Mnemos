@@ -27,21 +27,23 @@ import (
 // Out of scope: cross-language proper-noun resolution, alias
 // reconciliation ("Alice Smith" vs "Alice"), pronoun resolution.
 func detectEntityRoleDivergence(aText, bText string, aTokens, bTokens map[string]struct{}) bool {
-	return entityRoleDivergesPre(
-		len(aTokens), len(bTokens), contentOverlap(aTokens, bTokens),
-		func() map[string]struct{} { return properNounTokens(aText) },
-		func() map[string]struct{} { return properNounTokens(bText) },
-	)
+	if !entityShapeAllows(len(aTokens), len(bTokens), contentOverlap(aTokens, bTokens)) {
+		return false
+	}
+	return entityRoleDivergesPre(properNounTokens(aText), properNounTokens(bText))
 }
 
-// entityRoleDivergesPre is detectEntityRoleDivergence with the token-set sizes
-// and the overlap supplied by the caller, and with the proper-noun extraction
-// behind thunks so it is still only paid when the cheap shape guards pass.
+// entityShapeAllows is the cheap half of detectEntityRoleDivergence: the shape
+// guards that decide whether extracting proper nouns is worth it at all.
 //
-// The incremental path already knows the overlap (it comes out of the candidate
-// index) and already caches each claim's proper nouns, so recomputing both per
-// pair was pure waste.
-func entityRoleDivergesPre(la, lb, overlap int, aProperFn, bProperFn func() map[string]struct{}) bool {
+// It is split out rather than folded into entityRoleDivergesPre so that neither
+// caller has to build a closure to keep the extraction lazy. A bound method
+// value or a capturing func literal is a heap allocation, and in a loop that
+// runs once per candidate pair that alone cost more than the work it deferred.
+//
+// The incremental path already knows the overlap — it comes out of the
+// candidate index — so it is passed in rather than recomputed.
+func entityShapeAllows(la, lb, overlap int) bool {
 	if la == 0 || lb == 0 {
 		return false
 	}
@@ -54,18 +56,16 @@ func entityRoleDivergesPre(la, lb, overlap int, aProperFn, bProperFn func() map[
 	if la > 3 || lb > 3 {
 		return false
 	}
-
 	if overlap < 1 {
 		return false
 	}
-	onlyA := la - overlap
-	onlyB := lb - overlap
-	if onlyA < 1 || onlyB < 1 {
-		return false
-	}
+	return la-overlap >= 1 && lb-overlap >= 1
+}
 
-	aProperNouns := aProperFn()
-	bProperNouns := bProperFn()
+// entityRoleDivergesPre is the expensive half: it decides whether the two
+// claims' proper nouns actually disagree. Only call it when entityShapeAllows
+// returned true.
+func entityRoleDivergesPre(aProperNouns, bProperNouns map[string]struct{}) bool {
 	if len(aProperNouns) == 0 && len(bProperNouns) == 0 {
 		// No capitalized non-leading tokens on either side — likely
 		// not a named-entity claim. Fall back to other detectors.
@@ -76,11 +76,7 @@ func entityRoleDivergesPre(la, lb, overlap int, aProperFn, bProperFn func() map[
 	// proper noun (capitalized in the source) — otherwise we'd flag
 	// "the cat is small" vs "the cat is fast" as a contradiction,
 	// which is a value-divergence call, not an entity one.
-	if !hasProperNounDivergence(aProperNouns, bProperNouns) {
-		return false
-	}
-
-	return true
+	return hasProperNounDivergence(aProperNouns, bProperNouns)
 }
 
 // properNounTokens returns the lowercased + stemmed forms of tokens

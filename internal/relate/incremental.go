@@ -17,7 +17,7 @@ import (
 // few dozen claims is more work than the pairwise comparisons it would avoid.
 // The threshold is not a correctness boundary — both paths run the identical
 // pair evaluation and produce the identical relationships (see
-// TestIndexedMatchesFullScan) — only a cost one.
+// TestScanAndIndexPathsAgree) — only a cost one.
 const indexCorpusThreshold = 64
 
 // IncrementalStats reports what one DetectIncremental call actually did. It
@@ -246,7 +246,8 @@ func evaluatePair(a, b *claimDerived, overlap int) (domain.RelationshipType, boo
 		relType = domain.RelationshipTypeContradicts
 		ok = true
 	}
-	if !ok && entityRoleDivergesPre(len(a.tokens), len(b.tokens), overlap, a.properNouns, b.properNouns) {
+	if !ok && entityShapeAllows(len(a.tokens), len(b.tokens), overlap) &&
+		entityRoleDivergesPre(a.properNouns(), b.properNouns()) {
 		relType = domain.RelationshipTypeContradicts
 		ok = true
 	}

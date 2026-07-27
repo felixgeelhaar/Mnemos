@@ -28,7 +28,7 @@ import (
 // So a pair with zero shared content tokens can never produce an edge. Skipping
 // those pairs is not a heuristic and not a recall trade — it is exact. The
 // candidate set the index returns is a superset of every pair the full scan
-// would have kept, which is what TestIndexedMatchesFullScan asserts directly.
+// would have kept, which is what TestScanAndIndexPathsAgree asserts directly.
 //
 // # The zero-token lemma is load-bearing
 //

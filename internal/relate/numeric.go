@@ -204,10 +204,17 @@ func floatsClose(a, b float64) bool {
 // Runs after the polarity / value-divergence paths so it only kicks in
 // when those didn't already classify the pair.
 func detectNumericDivergence(aText, bText string, aTokens, bTokens map[string]struct{}) bool {
-	return numericDivergesPre(
-		extractNumerics(aText), wordTokens(aTokens),
-		extractNumerics(bText), wordTokens(bTokens),
-	)
+	aNums := extractNumerics(aText)
+	bNums := extractNumerics(bText)
+	// Bail before building the word-token sets, exactly as the single-function
+	// version did. Keeping the wrapper's evaluation ORDER faithful matters
+	// beyond taste: the benchmark that establishes the "before" number calls
+	// through here, and eagerly building two maps the original never built
+	// would flatter the change.
+	if len(aNums) == 0 || len(bNums) == 0 {
+		return false
+	}
+	return numericDivergesPre(aNums, wordTokens(aTokens), bNums, wordTokens(bTokens))
 }
 
 // numericDivergesPre is detectNumericDivergence with the per-claim derivations
