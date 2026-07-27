@@ -68,6 +68,11 @@ type candidateIndex struct {
 
 // buildCandidateIndex indexes existing by content token. It does not copy the
 // claims; the caller must not mutate them while the index is alive.
+//
+// Claim ordinals are int32, which bounds a single call at 2^31 existing claims.
+// That is far past the point where holding the corpus in memory as a
+// []domain.Claim — which is how DetectIncremental is handed it — stops working,
+// so the narrower type is free.
 func buildCandidateIndex(existing []domain.Claim) *candidateIndex {
 	ci := &candidateIndex{
 		claims:   existing,
