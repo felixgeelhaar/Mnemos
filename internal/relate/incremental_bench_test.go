@@ -107,3 +107,24 @@ func TestIncrementalSelectivity(t *testing.T) {
 			100*float64(stats.PairsEvaluated)/float64(stats.PairsPossible), stats.Relationships)
 	}
 }
+
+// BenchmarkBuildCandidateIndex isolates the part of the incremental path that
+// is still linear in corpus size: tokenizing every existing claim and building
+// the postings map, from scratch, on every write.
+//
+// It is measured separately because it is the hand-off. Nothing inside
+// internal/relate can avoid it — the caller hands DetectIncremental a
+// []domain.Claim and the package has to look at all of them. Making it go away
+// means a persistent or store-side index, which is a change to the storage
+// ports.
+func BenchmarkBuildCandidateIndex(b *testing.B) {
+	for _, size := range []int{1000, 10000, 50000} {
+		existing := generateCorpus(defaultCorpusOptions(size, 1))
+		b.Run(fmt.Sprintf("existing=%d", size), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				_ = buildCandidateIndex(existing)
+			}
+		})
+	}
+}
