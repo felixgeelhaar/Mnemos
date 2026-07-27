@@ -167,6 +167,22 @@ func aspectsConflict(a, b aspect) bool {
 func detectTemporalDivergence(aText, bText string, aTokens, bTokens map[string]struct{}) bool {
 	aAspect := classifyAspect(aText)
 	bAspect := classifyAspect(bText)
+	// Bail before building the anchor sets, as the single-function version did.
+	// See the note on detectNumericDivergence: the wrapper is what the
+	// before/after benchmark measures, so its evaluation order has to stay
+	// faithful.
+	if !aspectsConflict(aAspect, bAspect) {
+		return false
+	}
+	return temporalDivergesPre(aAspect, anchorTokens(aTokens), bAspect, anchorTokens(bTokens))
+}
+
+// temporalDivergesPre is detectTemporalDivergence with the per-claim
+// derivations (aspect label and anchor-token set) supplied by the caller.
+// Both are functions of one claim; the pairwise loop recomputed all four per
+// pair, which meant two full text scans and two map allocations for every
+// candidate.
+func temporalDivergesPre(aAspect aspect, aAnchor map[string]struct{}, bAspect aspect, bAnchor map[string]struct{}) bool {
 	if !aspectsConflict(aAspect, bAspect) {
 		return false
 	}
@@ -193,8 +209,6 @@ func detectTemporalDivergence(aText, bText string, aTokens, bTokens map[string]s
 	// "migration is still running" anchors on {migration} out of {migration,
 	// tuesday} — a ratio of 0.5 — once "completed"/"still"/"running" are
 	// removed.
-	aAnchor := anchorTokens(aTokens)
-	bAnchor := anchorTokens(bTokens)
 	overlap := contentOverlap(aAnchor, bAnchor)
 	if overlap < 1 {
 		return false
