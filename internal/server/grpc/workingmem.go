@@ -5,6 +5,7 @@ import (
 	"time"
 
 	mnemos "go.klarlabs.de/mnemos"
+	"go.klarlabs.de/mnemos/internal/domain"
 	mnemosv1 "go.klarlabs.de/mnemos/proto/gen/mnemos/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -51,7 +52,13 @@ func (s *Server) GetBlocks(ctx context.Context, req *mnemosv1.GetBlocksRequest) 
 }
 
 // SetBlock sets or appends a working-memory block.
+//
+// Scope first, availability second: an unauthorized caller learns only that it
+// is unauthorized, not whether a brain is attached.
 func (s *Server) SetBlock(ctx context.Context, req *mnemosv1.SetBlockRequest) (*mnemosv1.SetBlockResponse, error) {
+	if err := s.requireScope(ctx, domain.ScopeClaimsWrite); err != nil {
+		return nil, err
+	}
 	if s.memFor(ctx) == nil {
 		return nil, s.brainUnavailable()
 	}
@@ -70,8 +77,13 @@ func (s *Server) SetBlock(ctx context.Context, req *mnemosv1.SetBlockRequest) (*
 	return &mnemosv1.SetBlockResponse{Owner: req.GetOwner(), Label: req.GetLabel()}, nil
 }
 
-// Synthesize runs a synthesis pass (actions -> schemas + reflexes).
+// Synthesize runs a synthesis pass (actions -> schemas + reflexes). It derives
+// and persists schemas and reflexes, so it is a write however read-only its
+// name sounds — hence claims:write, matching POST /v1/synthesize.
 func (s *Server) Synthesize(ctx context.Context, _ *mnemosv1.SynthesizeRequest) (*mnemosv1.SynthesizeResponse, error) {
+	if err := s.requireScope(ctx, domain.ScopeClaimsWrite); err != nil {
+		return nil, err
+	}
 	if s.memFor(ctx) == nil {
 		return nil, s.brainUnavailable()
 	}
