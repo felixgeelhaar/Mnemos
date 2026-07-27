@@ -4,9 +4,23 @@ info:
   description: |
     Mnemos is the local-first evidence layer that grounds AI in truth. This
     schema covers the HTTP registry surface exposed by `mnemos serve`. The
-    equivalent gRPC service is at `proto/mnemos/v1/mnemos.proto` and covers
-    the same Phase 2-7 entity surface.
-  version: 0.13.0
+    equivalent gRPC service is `mnemos.v1.MnemosService` at
+    `proto/mnemos/v1/mnemos.proto` and covers the same Phase 2-7 entity
+    surface.
+
+    **Vocabulary (v0.85.0, ADR 0011).** The wire speaks the brain vocabulary:
+    the resources are `episodes`, `beliefs` and `associations`. The former
+    `/v1/events`, `/v1/claims` and `/v1/relationships` were renamed in place
+    and now 404; the additive `/v2` layer was retired in the same release.
+
+    **Auth (v0.85.1 / v0.86.0).** Secure by default: every path in this
+    document requires a bearer JWT unless it declares `security: []`. That
+    includes reads. Anonymous `GET`/`HEAD`/`OPTIONS` on the data API is an
+    explicit operator opt-in (`serve --public-reads` / `MNEMOS_PUBLIC_READS`)
+    and is not modelled here. `/internal/metrics` is authenticated by default
+    and is deliberately excluded from that bypass; open it separately with
+    `serve --metrics-public` / `MNEMOS_METRICS_PUBLIC`.
+  version: 0.117.2
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
@@ -15,12 +29,15 @@ servers:
     description: Default `mnemos serve` bind
 security:
   - bearerAuth: []
-  - {}
 paths:
   /health:
     get:
       summary: Liveness probe
-      description: Open path; bypasses bearer auth.
+      description: |
+        Bare liveness `200` — body is `{"status":"ok"}` and nothing else. It
+        deliberately leaks no version, DB path, counts or tenant data, which
+        is why it can stay anonymous. `/healthz` is an identical alias. The
+        richer readiness report lives behind auth at `/internal/ready`.
       security: []
       responses:
         "200":
@@ -28,6 +45,51 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Health" }
+  /healthz:
+    get:
+      summary: Liveness probe (alias of /health)
+      security: []
+      responses:
+        "200":
+          description: Server reachable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+  /internal/ready:
+    get:
+      summary: Readiness probe (authenticated)
+      description: |
+        Version plus a DB write probe. Authenticated — the report carries
+        operational detail that must not leak on a hosted listener, and there
+        is no public opt-out. Returns `503` when a subsystem check fails so a
+        load balancer can react without parsing the body.
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "503":
+          description: A subsystem probe failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+  /internal/metrics:
+    get:
+      summary: Prometheus RED metrics
+      description: |
+        Authenticated by default. Open it for a trusted-network scrape with
+        `serve --metrics-public` / `MNEMOS_METRICS_PUBLIC`; it is deliberately
+        NOT covered by the `--public-reads` anonymous-read bypass, so a public
+        read API can never also expose the per-route traffic shape.
+      responses:
+        "200":
+          description: Prometheus text exposition format
+          content:
+            text/plain:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /v1/metrics:
     get:
       summary: Knowledge-base counts
@@ -78,129 +140,219 @@ paths:
                   used_embeddings: { type: boolean }
         "400": { description: "Missing or empty text" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-  /v1/events:
+  /v1/episodes:
     get:
-      summary: List events
+      summary: List episodes
+      description: Renamed from `/v1/events` in v0.85.0; the old path 404s.
       parameters:
-        - { name: run_id, in: query, schema: { type: string }, description: "When set, restricts results to events for this run only. Used by external-agent auditors to replay one run's full chain." }
+        - { name: run_id, in: query, schema: { type: string }, description: "When set, restricts results to episodes for this run only. Used by external-agent auditors to replay one run's full chain." }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
         - { name: offset, in: query, schema: { type: integer, minimum: 0 } }
       responses:
         "200":
-          description: Events
+          description: Episodes
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  events:
+                  episodes:
                     type: array
-                    items: { $ref: "#/components/schemas/Event" }
+                    items: { $ref: "#/components/schemas/Episode" }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
     post:
-      summary: Append a batch of events
+      summary: Append a batch of episodes
+      description: |
+        Requires the `events:write` scope. Bodies are decoded with unknown
+        fields rejected, so the wrapper key must be `episodes` — a body keyed
+        `events` is a `400`, not a silent no-op.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [events]
+              required: [episodes]
               properties:
-                events:
+                episodes:
                   type: array
-                  items: { $ref: "#/components/schemas/Event" }
+                  maxItems: 1000
+                  items: { $ref: "#/components/schemas/Episode" }
       responses:
-        "200":
+        "201":
           description: Append summary
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AppendSummary" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-  /v1/claims:
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /v1/beliefs:
     get:
-      summary: List claims
+      summary: List beliefs
       description: |
-        Bi-temporal: claims have a validity-time axis (`as_of`) and an
+        Renamed from `/v1/claims` in v0.85.0; the old path 404s.
+
+        Bi-temporal: beliefs have a validity-time axis (`as_of`) and an
         ingestion-time axis (`recorded_as_of`). Both filters are
-        independent; a claim that was valid yesterday but recorded
+        independent; a belief that was valid yesterday but recorded
         today returns under `as_of=yesterday` AND `recorded_as_of=now`,
         and disappears under `as_of=yesterday` AND `recorded_as_of=yesterday`.
       parameters:
         - { name: type, in: query, schema: { type: string, enum: [fact, hypothesis, decision] } }
         - { name: status, in: query, schema: { type: string, enum: [active, contested, resolved, deprecated] } }
-        - { name: as_of, in: query, schema: { type: string, format: date-time }, description: "Validity time. Returns claims that were in force at this instant." }
-        - { name: recorded_as_of, in: query, schema: { type: string, format: date-time }, description: "Ingestion time. Drops claims with created_at after this instant — the response reproduces what the store knew then." }
+        - { name: as_of, in: query, schema: { type: string, format: date-time }, description: "Validity time. Returns beliefs that were in force at this instant." }
+        - { name: recorded_as_of, in: query, schema: { type: string, format: date-time }, description: "Ingestion time. Drops beliefs with created_at after this instant — the response reproduces what the store knew then." }
+        - { name: run_id, in: query, schema: { type: string }, description: "Restrict to beliefs whose evidence links to an episode in this run." }
+        - { name: similar_to, in: query, schema: { type: string }, description: "Semantic-search branch: rank beliefs by cosine similarity to this text. REQUIRES run_id (the tenant boundary) and short-circuits the type/status/as_of filters." }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
         - { name: offset, in: query, schema: { type: integer, minimum: 0 } }
       responses:
         "200":
-          description: Claims
+          description: Beliefs
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  claims:
+                  beliefs:
                     type: array
-                    items: { $ref: "#/components/schemas/Claim" }
+                    items: { $ref: "#/components/schemas/Belief" }
+                  evidence:
+                    type: array
+                    items: { $ref: "#/components/schemas/BeliefEvidence" }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
     post:
-      summary: Upsert a batch of claims
+      summary: Upsert a batch of beliefs
+      description: Requires the `claims:write` scope.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [claims]
+              required: [beliefs]
               properties:
-                claims:
+                beliefs:
                   type: array
-                  items: { $ref: "#/components/schemas/Claim" }
+                  maxItems: 1000
+                  items: { $ref: "#/components/schemas/Belief" }
+                evidence:
+                  type: array
+                  items: { $ref: "#/components/schemas/BeliefEvidence" }
       responses:
-        "200":
+        "201":
           description: Upsert summary
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AppendSummary" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-  /v1/relationships:
+        "403": { $ref: "#/components/responses/Forbidden" }
+    delete:
+      summary: Purge every belief for one run (GDPR Art. 17)
+      description: |
+        Removes the beliefs tied to episodes under `run_id` along with their
+        dependent rows (evidence links, embeddings, status history,
+        belief-only associations); the run's episodes go last. Requires the
+        `claims:write` scope.
+      parameters:
+        - { name: run_id, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Per-table delete counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  request_id: { type: string }
+                  run_id: { type: string }
+                  beliefs_deleted: { type: integer }
+                  episodes_deleted: { type: integer }
+                  embeddings_deleted: { type: integer }
+                  associations_deleted: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /v1/associations:
     get:
-      summary: List relationships
+      summary: List associations
+      description: Renamed from `/v1/relationships` in v0.85.0; the old path 404s.
       parameters:
         - { name: type, in: query, schema: { type: string, enum: [supports, contradicts, causes, caused_by, action_of, outcome_of, validates, refutes, derived_from] } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
         - { name: offset, in: query, schema: { type: integer, minimum: 0 } }
       responses:
         "200":
-          description: Relationships
+          description: Associations
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  relationships:
+                  associations:
                     type: array
-                    items: { $ref: "#/components/schemas/Relationship" }
+                    items: { $ref: "#/components/schemas/Association" }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
     post:
-      summary: Upsert relationships
+      summary: Upsert associations
+      description: Requires the `relationships:write` scope.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [relationships]
+              required: [associations]
               properties:
-                relationships:
+                associations:
                   type: array
-                  items: { $ref: "#/components/schemas/Relationship" }
+                  maxItems: 1000
+                  items: { $ref: "#/components/schemas/Association" }
       responses:
-        "200":
+        "201":
           description: Upsert summary
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AppendSummary" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /v1/schemas:
+    get:
+      summary: List promoted schemas (neocortex read)
+      description: |
+        A schema is a de-identified generalization promoted to the shared
+        neocortex tier by the consolidation pass. Provenance is corroboration
+        *counts* (`distinct_tenants` / `evidence_count`), never tenant ids or
+        raw evidence. Returns `503` on a backend without a promoted-schema
+        store.
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [pending, active] } }
+      responses:
+        "200":
+          description: Promoted schemas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schemas:
+                    type: array
+                    items: { $ref: "#/components/schemas/GlobalSchema" }
+                  total: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "503":
+          description: Promoted-schema store not available on this backend
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /v1/context:
     get:
       summary: Get a Context Block for a run
@@ -289,7 +441,7 @@ paths:
                   applied_filters:
                     type: object
                     additionalProperties: true
-                  claims:
+                  beliefs:
                     type: array
                     items:
                       type: object
@@ -300,14 +452,20 @@ paths:
                         status: { type: string }
                         confidence: { type: number, format: double }
                         trust_score: { type: number, format: double }
-                  contradictions:
+                  dissonances:
                     type: array
-                    items: { $ref: "#/components/schemas/Relationship" }
+                    items: { $ref: "#/components/schemas/Association" }
+                  auto_resolved: { type: boolean }
+                  contradiction_explanation: { type: string }
+                  verdicts:
+                    type: array
+                    items: { $ref: "#/components/schemas/Verdict" }
         "400":
           description: Missing query or invalid filter
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
     post:
       summary: Hybrid retrieval (JSON body variant)
       description: |
@@ -327,6 +485,9 @@ paths:
                 top_k: { type: integer, minimum: 1, maximum: 200 }
                 min_trust: { type: number, format: double, minimum: 0, maximum: 1 }
                 as_of: { type: string, format: date-time }
+                recorded_as_of: { type: string, format: date-time }
+                consumer: { type: string, enum: [user, agent], description: "agent triggers automatic trust-based contradiction resolution; user (default) surfaces them with an explanation." }
+                visibility: { type: string, enum: [personal, team, org] }
                 scope:
                   type: object
                   properties:
@@ -350,13 +511,17 @@ paths:
                   top_k: { type: integer }
                   total: { type: integer }
                   applied_filters: { type: object }
-                  claims: { type: array, items: { type: object } }
-                  contradictions: { type: array, items: { $ref: "#/components/schemas/Relationship" } }
+                  beliefs: { type: array, items: { type: object } }
+                  dissonances: { type: array, items: { $ref: "#/components/schemas/Association" } }
+                  auto_resolved: { type: boolean }
+                  contradiction_explanation: { type: string }
+                  verdicts: { type: array, items: { $ref: "#/components/schemas/Verdict" } }
         "400":
           description: Missing query or invalid filter
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /v1/embeddings:
     get:
       summary: List embeddings
@@ -375,8 +540,13 @@ paths:
                   embeddings:
                     type: array
                     items: { $ref: "#/components/schemas/Embedding" }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
     post:
       summary: Upsert embeddings
+      description: Requires the `embeddings:write` scope.
       requestBody:
         required: true
         content:
@@ -387,14 +557,16 @@ paths:
               properties:
                 embeddings:
                   type: array
+                  maxItems: 1000
                   items: { $ref: "#/components/schemas/Embedding" }
       responses:
-        "200":
+        "201":
           description: Upsert summary
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AppendSummary" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
   /v1/who-knows:
     get:
       summary: Rank the workers most expert on a query
@@ -799,9 +971,26 @@ components:
       bearerFormat: JWT
       description: |
         JWT (HS256) issued by the same `mnemos serve` instance via
-        `mnemos token issue`. Required on all write methods (POST/PUT/DELETE);
-        reads stay open. Signing key from `MNEMOS_JWT_SECRET` or
-        `MNEMOS_AUTH_DIR/jwt-secret`. The same verifier gates the gRPC surface.
+        `mnemos token issue`. Required on EVERY data endpoint since v0.85.1 —
+        reads included, not just POST/PUT/DELETE. A tokenless `GET /v1/beliefs`
+        is a `401`.
+
+        Only `/health`, `/healthz`, `/` (landing), `/app` (SPA shell) and the
+        rate-limited `POST /v1/leads` are anonymous; they expose no knowledge
+        or tenant data.
+
+        Writes additionally check the token's `scp` claim: `events:write`,
+        `claims:write`, `relationships:write`, `embeddings:write`,
+        `promote:global`, or `*`. A missing scope is a `403`, not a `401`.
+
+        Operator opt-outs, both off by default: `serve --public-reads` /
+        `MNEMOS_PUBLIC_READS` (anonymous GET/HEAD/OPTIONS on the data API;
+        ignored under `--require-tenant`) and `serve --metrics-public` /
+        `MNEMOS_METRICS_PUBLIC` (anonymous `/internal/metrics`, which the
+        `--public-reads` bypass deliberately never covers).
+
+        Signing key from `MNEMOS_JWT_SECRET` or `MNEMOS_AUTH_DIR/jwt-secret`.
+        The same verifier gates the gRPC surface and `mnemos mcp --http`.
         Client-side `MNEMOS_REGISTRY_TOKEN` is for push/pull against a *remote*
         registry and is unrelated to inbound auth.
   responses:
@@ -810,20 +999,38 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Token authenticated but lacks the required scope (or run allowlist)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
   schemas:
     Health:
       type: object
+      description: Bare liveness body — `{"status":"ok"}` and nothing else.
       properties:
         status: { type: string, enum: [ok] }
+      required: [status]
+    Readiness:
+      type: object
+      description: Authenticated readiness report from `/internal/ready`.
+      properties:
+        status: { type: string, enum: [ok, degraded] }
         version: { type: string }
+        healthy: { type: boolean }
+        checks:
+          type: array
+          items:
+            type: object
       required: [status]
     Error:
       type: object
       properties:
         error: { type: string }
       required: [error]
-    Event:
+    Episode:
       type: object
+      description: Renamed from `Event` in v0.85.0 (ADR 0011).
       properties:
         id: { type: string }
         run_id: { type: string }
@@ -831,46 +1038,88 @@ components:
         content: { type: string }
         source_input_id: { type: string }
         timestamp: { type: string, format: date-time }
+        ingested_at: { type: string, format: date-time }
         metadata:
           type: object
-          additionalProperties: true
-      required: [id, content, timestamp]
-    Claim:
+          additionalProperties: { type: string }
+      required: [id, content, source_input_id, timestamp]
+    BeliefEvidence:
       type: object
+      description: One belief→episode evidence link.
+      properties:
+        belief_id: { type: string }
+        episode_id: { type: string }
+      required: [belief_id, episode_id]
+    Verdict:
+      type: object
+      description: |
+        Structured contradiction resolution, returned by `/v1/search` only
+        when `consumer=agent`.
+      properties:
+        winner_claim_id: { type: string }
+        loser_claim_id: { type: string }
+        confidence: { type: number, format: double }
+        rationale: { type: string }
+        action: { type: string }
+        escalation_reason: { type: string }
+      required: [action]
+    GlobalSchema:
+      type: object
+      description: A promoted, de-identified generalization in the shared neocortex tier.
+      properties:
+        id: { type: string }
+        statement: { type: string }
+        context:
+          type: object
+          properties:
+            service: { type: string }
+            env: { type: string }
+            team: { type: string }
+        polarity: { type: string }
+        distinct_tenants: { type: integer }
+        evidence_count: { type: integer }
+        confidence: { type: number, format: double }
+        surprise: { type: number, format: double }
+        has_surprise: { type: boolean }
+        status: { type: string, enum: [pending, active] }
+        promoted_at: { type: string, format: date-time }
+        created_by: { type: string }
+      required: [id, statement, distinct_tenants, evidence_count, confidence, status, promoted_at]
+    Belief:
+      type: object
+      description: Renamed from `Claim` in v0.85.0 (ADR 0011).
       properties:
         id: { type: string }
         text: { type: string }
         type: { type: string, enum: [fact, hypothesis, decision] }
         status: { type: string, enum: [active, contested, resolved, deprecated] }
         confidence: { type: number, format: double }
-        trust_score: { type: number, format: double }
-        valid_from: { type: string, format: date-time, nullable: true }
-        valid_to: { type: string, format: date-time, nullable: true }
-        evidence:
-          type: array
-          items:
-            type: object
-            properties:
-              event_id: { type: string }
-            required: [event_id]
-        scope:
+        confidence_components:
           type: object
-          properties:
-            service: { type: string }
-            env: { type: string }
-            team: { type: string }
+          additionalProperties: { type: number, format: double }
+        created_at: { type: string, format: date-time }
+        created_by: { type: string, description: "On append, OVERRIDES the token actor for this belief; echoed back on read." }
+        source_document: { type: string }
+        source_type: { type: string }
+        source_authority: { type: number, format: double }
+        liveness: { type: string }
+        visibility: { type: string, enum: [personal, team, org], description: "Defaults to team when omitted." }
+        similarity: { type: number, format: double, description: "Cosine similarity — present only on the ?similar_to= branch." }
       required: [id, text, type]
-    Relationship:
+    Association:
       type: object
+      description: |
+        Renamed from `Relationship` in v0.85.0 (ADR 0011); the endpoint cross-
+        references are `from_belief_id` / `to_belief_id`.
       properties:
         id: { type: string }
         type:
           type: string
           enum: [supports, contradicts, causes, caused_by, action_of, outcome_of, validates, refutes, derived_from]
-        from_claim_id: { type: string }
-        to_claim_id: { type: string }
+        from_belief_id: { type: string }
+        to_belief_id: { type: string }
         created_at: { type: string, format: date-time }
-      required: [id, type, from_claim_id, to_claim_id]
+      required: [id, type, from_belief_id, to_belief_id]
     Embedding:
       type: object
       properties:
@@ -884,24 +1133,24 @@ components:
     AppendSummary:
       type: object
       properties:
-        appended: { type: integer }
+        accepted: { type: integer }
         skipped: { type: integer }
-      required: [appended]
+      required: [accepted]
     Metrics:
       type: object
+      description: |
+        Counts mirroring `mnemos metrics`. Field names follow the v0.85.0
+        brain vocabulary — `episodes` (was `events`), `beliefs` (was `claims`),
+        `associations` (was `relationships`), `dissonances` (was
+        `contradictions`).
       properties:
-        events: { type: integer }
-        claims: { type: integer }
-        relationships: { type: integer }
-        contradictions: { type: integer }
-        avg_trust: { type: number, format: double }
-        low_trust_count: { type: integer }
-        claims_by_type:
-          type: object
-          additionalProperties: { type: integer }
-        claims_by_status:
-          type: object
-          additionalProperties: { type: integer }
+        runs: { type: integer }
+        episodes: { type: integer }
+        beliefs: { type: integer }
+        contested_beliefs: { type: integer }
+        associations: { type: integer }
+        dissonances: { type: integer }
+        embeddings: { type: integer }
     Expert:
       type: object
       properties:

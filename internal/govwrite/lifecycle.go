@@ -2,11 +2,13 @@ package govwrite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	axidomain "go.klarlabs.de/axi/domain"
 
+	"go.klarlabs.de/mnemos/internal/domain"
 	"go.klarlabs.de/mnemos/internal/store"
 )
 
@@ -128,46 +130,172 @@ func (w *Writer) MergeEntities(ctx context.Context, winnerID, loserID string) er
 	return err
 }
 
-// --- Delete claim cascade (single atomic governed entry) ---
+// --- Delete claim cascade (single governed entry, tombstone-first) ---
+
+// TombstoneReason is the audit reason recorded on the status_history row a
+// cascade delete writes before it strips a claim's dependent rows. It is the
+// marker an operator (or a resumed run) can grep the audit trail for when a
+// delete did not get to remove the claim row.
+const TombstoneReason = "cascade delete: tombstoned before dependent rows are stripped"
+
+// ErrStrippedClaimSurvives is the sentinel every [PartialDeleteError] wraps.
+// Callers that only need "did the cascade leave residue?" can test
+// errors.Is(err, ErrStrippedClaimSurvives) instead of type-asserting.
+var ErrStrippedClaimSurvives = errors.New("cascade delete left a tombstoned claim row behind")
+
+// PartialDeleteError reports the one outcome a cross-repository cascade cannot
+// rule out: the dependent rows were removed but the claim row itself was not.
+//
+// The repositories a cascade touches (relationships, embeddings, claims) each
+// commit independently — there is no cross-repository transaction in the port
+// surface — so a failure on the final delete used to return an error while the
+// earlier deletes had already committed. What survived was an ACTIVE claim with
+// no evidence and no edges: an unsupported belief that still scored, and that
+// recall could still surface. That is strictly worse than either a clean delete
+// or a clean no-op.
+//
+// The cascade therefore tombstones first (see [TombstoneReason]): the claim is
+// deprecated BEFORE anything is stripped, so the worst reachable end state is a
+// deprecated, retired row rather than a live phantom belief. This error is how
+// that end state is surfaced instead of left silent; the cascade is idempotent,
+// so re-running it on the same id converges once the underlying fault clears.
+type PartialDeleteError struct {
+	// ClaimID is the claim whose row survived.
+	ClaimID string
+	// Tombstoned reports whether the surviving row was successfully
+	// deprecated. False means the tombstone write ALSO failed — nothing was
+	// stripped in that case, so the claim is untouched and still intact.
+	Tombstoned bool
+	// Err is the underlying failure from the final delete.
+	Err error
+}
+
+func (e *PartialDeleteError) Error() string {
+	if !e.Tombstoned {
+		return fmt.Sprintf("tombstone claim %s before cascade delete (nothing stripped; claim is intact): %v", e.ClaimID, e.Err)
+	}
+	return fmt.Sprintf(
+		"claim %s is TOMBSTONED (deprecated, dependent rows stripped) but its row could not be removed; re-run the delete to resume: %v",
+		e.ClaimID, e.Err)
+}
+
+func (e *PartialDeleteError) Unwrap() error { return e.Err }
+
+// Is lets errors.Is(err, ErrStrippedClaimSurvives) match a partial delete that
+// actually left residue. A failed tombstone stripped nothing, so it does not
+// match — the claim is intact and the caller can simply retry.
+func (e *PartialDeleteError) Is(target error) bool {
+	return target == ErrStrippedClaimSurvives && e.Tombstoned
+}
+
+// cascadeDeleteClaim removes a claim and every row it owns, tombstone-first.
+//
+// Sequence:
+//
+//  1. Read the claim. Absent → nothing to tombstone; the dependent deletes
+//     still run (they are idempotent) so a resumed run converges.
+//  2. Deprecate it, with [TombstoneReason] on the status_history row. This is
+//     the invariant the whole function exists for: from here on, whatever
+//     fails, no ACTIVE un-evidenced claim can survive.
+//  3. Strip the dependents (relationships, then the claim embedding).
+//  4. Delete the claim row (which cascades claim_evidence + status_history).
+//
+// Returns removed=false with a [PartialDeleteError] when step 4 fails: the
+// tombstone stands, the partial state is named, and a retry resumes.
+func cascadeDeleteClaim(ctx context.Context, conn *store.Conn, claimID string) (removed bool, err error) {
+	existing, err := conn.Claims.ListByIDs(ctx, []string{claimID})
+	if err != nil {
+		return false, fmt.Errorf("read claim %s before delete: %w", claimID, err)
+	}
+	if len(existing) == 1 && existing[0].Status != domain.ClaimStatusDeprecated {
+		tomb := existing[0]
+		tomb.Status = domain.ClaimStatusDeprecated
+		if err := conn.Claims.UpsertWithReasonAs(ctx, []domain.Claim{tomb}, TombstoneReason, domain.SystemUser); err != nil {
+			// Nothing has been stripped yet, so the claim is still whole.
+			return false, &PartialDeleteError{ClaimID: claimID, Tombstoned: false, Err: err}
+		}
+	}
+	if err := conn.Relationships.DeleteByClaim(ctx, claimID); err != nil {
+		return false, fmt.Errorf("delete relationships for %s: %w", claimID, err)
+	}
+	if err := conn.Embeddings.Delete(ctx, claimID, "claim"); err != nil {
+		return false, fmt.Errorf("delete embedding for %s: %w", claimID, err)
+	}
+	if err := conn.Claims.DeleteCascade(ctx, claimID); err != nil {
+		return false, &PartialDeleteError{ClaimID: claimID, Tombstoned: true, Err: err}
+	}
+	return true, nil
+}
 
 type deleteClaimCascadeInput struct{ ClaimID string }
 
+// deleteClaimCascadeResult is what the executor hands back. Removed=false is a
+// SUCCESSFUL execution that left a tombstone: the kernel records the evidence
+// row (including partial=true) and the public method turns it into a
+// [PartialDeleteError] for the caller. Failing the action instead would drop
+// the very audit record that documents the residue.
+type deleteClaimCascadeResult struct {
+	ClaimID string
+	Removed bool
+	Cause   string
+}
+
 type deleteClaimCascadeExecutor struct{ conn *store.Conn }
 
-// Execute performs the full per-claim delete sequence — relationships,
-// embedding, then the claim cascade (claim_evidence + status_history +
-// the claim row) — as ONE governed action so the destructive op is a
-// single entry on the evidence chain rather than four ungoverned reaches
-// into storage. Order matters under FK enforcement: edges and the
+// Execute performs the full per-claim delete sequence — tombstone,
+// relationships, embedding, then the claim cascade (claim_evidence +
+// status_history + the claim row) — as ONE governed action so the destructive
+// op is a single entry on the evidence chain rather than several ungoverned
+// reaches into storage. Order matters under FK enforcement: edges and the
 // embedding (which reference the claim) go before the claim itself.
 func (e deleteClaimCascadeExecutor) Execute(ctx context.Context, input any, _ axidomain.CapabilityInvoker) (axidomain.ExecutionResult, []axidomain.EvidenceRecord, error) {
 	in, ok := payload[deleteClaimCascadeInput](input)
 	if !ok {
 		return axidomain.ExecutionResult{}, nil, fmt.Errorf("delete_claim_cascade: unexpected input %T", input)
 	}
-	if err := e.conn.Relationships.DeleteByClaim(ctx, in.ClaimID); err != nil {
-		return axidomain.ExecutionResult{}, nil, fmt.Errorf("delete relationships for %s: %w", in.ClaimID, err)
-	}
-	if err := e.conn.Embeddings.Delete(ctx, in.ClaimID, "claim"); err != nil {
-		return axidomain.ExecutionResult{}, nil, fmt.Errorf("delete embedding for %s: %w", in.ClaimID, err)
-	}
-	if err := e.conn.Claims.DeleteCascade(ctx, in.ClaimID); err != nil {
-		return axidomain.ExecutionResult{}, nil, fmt.Errorf("delete claim %s: %w", in.ClaimID, err)
+	removed, err := cascadeDeleteClaim(ctx, e.conn, in.ClaimID)
+	var partial *PartialDeleteError
+	switch {
+	case err != nil && errors.As(err, &partial) && partial.Tombstoned:
+		// Residue, not a failed action: report it so the evidence chain
+		// records the tombstone the operator has to resolve.
+		return axidomain.ExecutionResult{
+				Data:    deleteClaimCascadeResult{ClaimID: in.ClaimID, Removed: false, Cause: partial.Err.Error()},
+				Summary: fmt.Sprintf("tombstoned claim %s (row NOT removed: %v)", in.ClaimID, partial.Err),
+			}, ev("mnemos.write.delete_claim_cascade", map[string]any{
+				"claim_id": in.ClaimID, "removed": false, "partial": true,
+				"cause": partial.Err.Error(),
+			}), nil
+	case err != nil:
+		return axidomain.ExecutionResult{}, nil, err
 	}
 	return axidomain.ExecutionResult{
-			Data:    in.ClaimID,
+			Data:    deleteClaimCascadeResult{ClaimID: in.ClaimID, Removed: removed},
 			Summary: fmt.Sprintf("deleted claim %s (relationships + embedding + cascade)", in.ClaimID),
 		}, ev("mnemos.write.delete_claim_cascade", map[string]any{
-			"claim_id": in.ClaimID,
+			"claim_id": in.ClaimID, "removed": true, "partial": false,
 		}), nil
 }
 
 // DeleteClaimCascade deletes a claim and every row it owns
 // (relationships touching it, its claim embedding, claim_evidence,
 // claim_status_history, the claim row) as one governed, audited action.
+//
+// The claim is deprecated before any dependent row is stripped, so a failure
+// part-way through can never leave an active, un-evidenced belief for recall to
+// surface. When the claim row itself survives, the returned error is a
+// [PartialDeleteError] (matching errors.Is(err, [ErrStrippedClaimSurvives]))
+// naming the tombstoned id; the action is idempotent, so re-running it once the
+// fault clears completes the delete.
 func (w *Writer) DeleteClaimCascade(ctx context.Context, claimID string) error {
-	_, err := dispatch[string](ctx, w, actionDeleteClaimCascade, deleteClaimCascadeInput{ClaimID: claimID})
-	return err
+	res, err := dispatch[deleteClaimCascadeResult](ctx, w, actionDeleteClaimCascade, deleteClaimCascadeInput{ClaimID: claimID})
+	if err != nil {
+		return err
+	}
+	if !res.Removed {
+		return &PartialDeleteError{ClaimID: claimID, Tombstoned: true, Err: errors.New(res.Cause)}
+	}
+	return nil
 }
 
 // --- Delete event cascade ---
@@ -177,9 +305,14 @@ type deleteEventCascadeInput struct{ EventID string }
 type deleteEventCascadeExecutor struct{ conn *store.Conn }
 
 // Execute cascades an event delete: every claim whose evidence points at
-// the event is deleted (relationships + embedding + claim cascade), then
-// the event's own embedding and the event row go. One governed entry for
-// the whole destructive sequence.
+// the event is deleted (tombstone + relationships + embedding + claim
+// cascade), then the event's own embedding and the event row go. One governed
+// entry for the whole destructive sequence.
+//
+// Per-claim deletes reuse [cascadeDeleteClaim], so the same tombstone-first
+// guarantee holds here: a failure part-way through leaves deprecated rows, not
+// active un-evidenced beliefs, and the event row is left in place so a re-run
+// can find its remaining claims and resume.
 func (e deleteEventCascadeExecutor) Execute(ctx context.Context, input any, _ axidomain.CapabilityInvoker) (axidomain.ExecutionResult, []axidomain.EvidenceRecord, error) {
 	in, ok := payload[deleteEventCascadeInput](input)
 	if !ok {
@@ -191,14 +324,12 @@ func (e deleteEventCascadeExecutor) Execute(ctx context.Context, input any, _ ax
 	}
 	cascaded := 0
 	for _, c := range dependent {
-		if err := e.conn.Relationships.DeleteByClaim(ctx, c.ID); err != nil {
-			return axidomain.ExecutionResult{}, nil, fmt.Errorf("delete relationships for %s: %w", c.ID, err)
+		removed, err := cascadeDeleteClaim(ctx, e.conn, c.ID)
+		if err != nil {
+			return axidomain.ExecutionResult{}, nil, fmt.Errorf("cascade event %s: %w", in.EventID, err)
 		}
-		if err := e.conn.Embeddings.Delete(ctx, c.ID, "claim"); err != nil {
-			return axidomain.ExecutionResult{}, nil, fmt.Errorf("delete claim embedding %s: %w", c.ID, err)
-		}
-		if err := e.conn.Claims.DeleteCascade(ctx, c.ID); err != nil {
-			return axidomain.ExecutionResult{}, nil, fmt.Errorf("delete claim %s: %w", c.ID, err)
+		if !removed {
+			return axidomain.ExecutionResult{}, nil, fmt.Errorf("cascade event %s: claim %s tombstoned but not removed", in.EventID, c.ID)
 		}
 		cascaded++
 	}

@@ -29,6 +29,7 @@ import (
 	markdownpkg "go.klarlabs.de/mnemos/internal/markdown"
 	"go.klarlabs.de/mnemos/internal/ports"
 	"go.klarlabs.de/mnemos/internal/query"
+	"go.klarlabs.de/mnemos/internal/runscope"
 	mnemosgrpc "go.klarlabs.de/mnemos/internal/server/grpc"
 	"go.klarlabs.de/mnemos/internal/store"
 	"google.golang.org/grpc"
@@ -83,10 +84,13 @@ func handleServe(args []string, _ Flags) {
 	requireTenant := false
 	publicReads := false   // secure by default: GET reads require a token unless opted in
 	metricsPublic := false // secure by default: /internal/metrics requires a token unless opted in
+	trustProxy := false    // secure by default: X-Forwarded-For is not believed
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--require-tenant":
 			requireTenant = true
+		case "--trust-proxy":
+			trustProxy = true
 		case "--public-reads":
 			publicReads = true
 		case "--metrics-public":
@@ -132,6 +136,18 @@ func handleServe(args []string, _ Flags) {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("MNEMOS_METRICS_PUBLIC"))) {
 	case "1", "true", "yes":
 		metricsPublic = true
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MNEMOS_TRUST_PROXY"))) {
+	case "1", "true", "yes":
+		trustProxy = true
+	}
+	// Only a deployment that actually sits behind a proxy overwriting
+	// X-Forwarded-For may believe it; otherwise the header is attacker-supplied
+	// and the per-IP limiter on the anonymous /v1/leads route is bypassable by
+	// varying it. Off by default, opt in explicitly.
+	trustProxyHeaders = trustProxy
+	if trustProxy {
+		fmt.Fprintln(os.Stderr, "serve: --trust-proxy is set — X-Forwarded-For determines the client IP for rate limiting. Only use this behind a proxy that OVERWRITES the header.")
 	}
 	// Secure by default: without an explicit opt-in, GET reads require a token.
 	// --require-tenant already authenticates every request, so --public-reads is
@@ -541,14 +557,33 @@ func sha256Hex(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// trustProxyHeaders gates whether clientIP believes X-Forwarded-For. It is
+// process-wide state set once at startup by handleServe (--trust-proxy /
+// MNEMOS_TRUST_PROXY); it defaults to false so every other entrypoint — tests,
+// newServerMux, the embedded surfaces — gets the safe behaviour without
+// opting in.
+//
+// Why it must default off: X-Forwarded-For is a client-supplied header. On a
+// directly-exposed listener nothing overwrites it, and clientIP feeds the
+// per-IP token bucket in front of POST /v1/leads — the one route
+// jwtAuthMiddleware exempts from auth. Trusting the header unconditionally
+// let a spammer mint a fresh rate-limit bucket per request by varying it,
+// which defeats the only control that route has.
+var trustProxyHeaders = false
+
+// clientIP resolves the source address used for rate limiting and lead
+// logging. The socket peer is authoritative; X-Forwarded-For is consulted
+// only when the operator has declared the server sits behind a proxy that
+// overwrites the header (see trustProxyHeaders).
 func clientIP(r *http.Request) string {
-	// Honour X-Forwarded-For when present and take the leftmost entry
-	// (the original client). Defaults to RemoteAddr's host portion.
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
+	if trustProxyHeaders {
+		// Leftmost entry is the original client, per the XFF convention.
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if i := strings.IndexByte(xff, ','); i >= 0 {
+				return strings.TrimSpace(xff[:i])
+			}
+			return strings.TrimSpace(xff)
 		}
-		return strings.TrimSpace(xff)
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -784,22 +819,12 @@ func listEventsHandler(conn *store.Conn, w http.ResponseWriter, r *http.Request)
 	// agent's callback) replay one run's full chain without scanning
 	// the global event log. Falls back to ListAll when unset.
 	runID := r.URL.Query().Get("run_id")
-	if runID != "" {
-		// Whitelist parity with the write path: if the bearer has a
-		// run whitelist, the filter must target a run inside it.
-		if allowed := allowedRunsFromContext(ctx); len(allowed) > 0 {
-			ok := false
-			for _, a := range allowed {
-				if a == runID {
-					ok = true
-					break
-				}
-			}
-			if !ok {
-				writeError(w, http.StatusForbidden, fmt.Sprintf("run_id %q not in token whitelist", runID))
-				return
-			}
-		}
+	// Whitelist parity with the write path — checked UNCONDITIONALLY, not
+	// just when the caller supplies run_id. Gating on `runID != ""` meant a
+	// run-scoped bearer only had to omit the filter to fall through to
+	// ListAll and receive every run's events.
+	if !requireRunScope(w, r, runID) {
+		return
 	}
 	var all []domain.Event
 	var err error
@@ -935,6 +960,13 @@ func listClaimsHandler(conn *store.Conn, w http.ResponseWriter, r *http.Request)
 	asOfRaw := r.URL.Query().Get("as_of")                  // validity time
 	recordedAsOfRaw := r.URL.Query().Get("recorded_as_of") // ingestion time
 	runIDFilter := r.URL.Query().Get("run_id")             // tenant boundary
+
+	// run_id is described as the tenant boundary but was never checked against
+	// the bearer's allowlist, so the caller picked their own boundary — or
+	// dropped it entirely and read every run. Gate it before any load.
+	if !requireRunScope(w, r, runIDFilter) {
+		return
+	}
 
 	if typeFilter != "" && !validClaimType(typeFilter) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid type %q", typeFilter))
@@ -1103,6 +1135,12 @@ func semanticSearchClaimsHandler(conn *store.Conn, w http.ResponseWriter, r *htt
 	runIDFilter := strings.TrimSpace(r.URL.Query().Get("run_id"))
 	if runIDFilter == "" {
 		writeError(w, http.StatusBadRequest, "similar_to requires run_id to scope the search (tenant boundary)")
+		return
+	}
+	// Requiring run_id is only half a boundary: the caller chose its value.
+	// Bind it to the bearer's allowlist so the token, not the query string,
+	// decides which corpus ranked retrieval may reach into.
+	if !requireRunScope(w, r, runIDFilter) {
 		return
 	}
 
@@ -1417,17 +1455,14 @@ func appendEventsHandler(gw *govwrite.Writer, w http.ResponseWriter, r *http.Req
 
 	// F.4: enforce the bearer's run whitelist before any DB write so
 	// a partial batch can't sneak through. We pre-check every run_id
-	// up front; an empty whitelist short-circuits the loop.
-	if allowed := allowedRunsFromContext(r.Context()); len(allowed) > 0 {
-		allowedSet := make(map[string]struct{}, len(allowed))
-		for _, a := range allowed {
-			allowedSet[a] = struct{}{}
-		}
-		for i, e := range req.Events {
-			if _, ok := allowedSet[e.RunID]; !ok {
-				writeError(w, http.StatusForbidden, fmt.Sprintf("events[%d].run_id %q not in token whitelist", i, e.RunID))
-				return
-			}
+	// up front; an unrestricted bearer short-circuits inside the helper.
+	// Membership goes through auth.Claims.AllowsRun rather than the exact-set
+	// compare this used to do, so a `prod-*` token is not silently stricter
+	// over REST than it is over MCP.
+	for i, e := range req.Events {
+		if !runAllowedForRequest(r, e.RunID) {
+			writeError(w, http.StatusForbidden, fmt.Sprintf("events[%d].run_id %q not in token whitelist", i, e.RunID))
+			return
 		}
 	}
 
@@ -1515,6 +1550,14 @@ func deleteClaimsHandler(conn *store.Conn, gw *govwrite.Writer, w http.ResponseW
 	runID := strings.TrimSpace(r.URL.Query().Get("run_id"))
 	if runID == "" {
 		writeError(w, http.StatusBadRequest, "run_id query parameter is required")
+		return
+	}
+	// The scope check above only says "may write claims"; it says nothing
+	// about WHOSE. Without this, a token scoped to run-a could pass
+	// ?run_id=run-b and irreversibly cascade-delete another run's claims,
+	// evidence, embeddings and events — the destructive counterpart to every
+	// other run-carrying write path, which has checked the allowlist since F.4.
+	if !requireRunScope(w, r, runID) {
 		return
 	}
 	ctx := r.Context()
@@ -1696,7 +1739,7 @@ func appendClaimsHandler(conn *store.Conn, gw *govwrite.Writer, w http.ResponseW
 		for _, e := range req.Evidence {
 			eventIDs = append(eventIDs, e.EventID)
 		}
-		bad, badRun, err := checkEventRunsAllowed(ctx, conn, eventIDs, allowed)
+		bad, badRun, err := runscope.CheckEventRunsAllowed(ctx, conn, eventIDs, allowed)
 		if err != nil {
 			writeInternalError(w, "run-scope check", err)
 			return
@@ -1793,12 +1836,12 @@ func appendRelationshipsHandler(conn *store.Conn, gw *govwrite.Writer, w http.Re
 				claimIDs = append(claimIDs, id)
 			}
 		}
-		evIDs, err := claimEventIDs(r.Context(), conn, claimIDs)
+		evIDs, err := runscope.ClaimEventIDs(r.Context(), conn, claimIDs)
 		if err != nil {
 			writeInternalError(w, "run-scope lookup", err)
 			return
 		}
-		bad, badRun, err := checkEventRunsAllowed(r.Context(), conn, evIDs, allowed)
+		bad, badRun, err := runscope.CheckEventRunsAllowed(r.Context(), conn, evIDs, allowed)
 		if err != nil {
 			writeInternalError(w, "run-scope check", err)
 			return
@@ -1927,13 +1970,13 @@ func appendEmbeddingsHandler(conn *store.Conn, gw *govwrite.Writer, w http.Respo
 				claimIDs = append(claimIDs, e.EntityID)
 			}
 		}
-		extraEvents, err := claimEventIDs(ctx, conn, claimIDs)
+		extraEvents, err := runscope.ClaimEventIDs(ctx, conn, claimIDs)
 		if err != nil {
 			writeInternalError(w, "run-scope lookup", err)
 			return
 		}
 		eventIDs = append(eventIDs, extraEvents...)
-		bad, badRun, err := checkEventRunsAllowed(ctx, conn, eventIDs, allowed)
+		bad, badRun, err := runscope.CheckEventRunsAllowed(ctx, conn, eventIDs, allowed)
 		if err != nil {
 			writeInternalError(w, "run-scope check", err)
 			return
@@ -2141,6 +2184,12 @@ func makeContextHandler(conn *store.Conn) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "run_id is required")
 			return
 		}
+		// A Context Block is a rendered digest of a run's whole knowledge
+		// state — the single most concentrated read on the surface. run_id was
+		// required but unbound, so any bearer could render any run's block.
+		if !requireRunScope(w, r, req.RunID) {
+			return
+		}
 
 		engine := query.NewEngine(conn.Events, conn.Claims, conn.Relationships)
 		block, err := engine.BuildContextBlock(r.Context(), query.ContextBlockOptions{
@@ -2260,6 +2309,13 @@ func makeSearchHandler(conn *store.Conn) http.HandlerFunc {
 		}
 		if req.Query == "" {
 			writeError(w, http.StatusBadRequest, "query is required")
+			return
+		}
+		// run_id is an optional filter here, which for a run-scoped bearer is
+		// the same hole as on /v1/episodes: omitting it selected
+		// AnswerWithOptions over AnswerForRunWithOptions and searched the
+		// whole brain. Fail closed instead.
+		if !requireRunScope(w, r, req.RunID) {
 			return
 		}
 		if req.TopK <= 0 {
@@ -2746,7 +2802,12 @@ type incidentRequest struct {
 	Summary          string `json:"summary"`
 	Severity         string `json:"severity"`
 	RootCauseClaimID string `json:"root_cause_claim_id"`
-	CreatedBy        string `json:"created_by"`
+	// CreatedBy is accepted and IGNORED. Authorship comes from the
+	// authenticated token (actorFromContext), never from the body — a caller
+	// that could name its own author could file an incident under someone
+	// else's identity. The field stays on the DTO only so existing clients
+	// that still send it don't trip the strict decoder with a 400.
+	CreatedBy string `json:"created_by"`
 }
 
 // makeIncidentsHandler handles:
@@ -2769,6 +2830,13 @@ func makeIncidentsHandler(conn *store.Conn, gw *govwrite.Writer) http.HandlerFun
 }
 
 func openIncidentHandler(gw *govwrite.Writer, w http.ResponseWriter, r *http.Request) {
+	// Opening an incident is a durable, governed write; it was the only REST
+	// POST that took no scope at all, so a read-only token could file
+	// incidents. Incidents are claim-adjacent records, hence claims:write —
+	// the same gate the rest of the knowledge write surface uses.
+	if !requireScope(w, r, domain.ScopeClaimsWrite) {
+		return
+	}
 	var req incidentRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid body: %v", err))
@@ -2791,6 +2859,7 @@ func openIncidentHandler(gw *govwrite.Writer, w http.ResponseWriter, r *http.Req
 	if severity == "" {
 		severity = domain.IncidentSeverityMedium
 	}
+	ctx := r.Context()
 	inc := domain.Incident{
 		ID:               id,
 		Title:            req.Title,
@@ -2799,9 +2868,11 @@ func openIncidentHandler(gw *govwrite.Writer, w http.ResponseWriter, r *http.Req
 		Status:           domain.IncidentStatusOpen,
 		RootCauseClaimID: req.RootCauseClaimID,
 		OpenedAt:         time.Now().UTC(),
-		CreatedBy:        req.CreatedBy,
+		// Attribution follows the token, not req.CreatedBy — every other write
+		// path on this surface stamps the context actor, and a body-supplied
+		// author is forgeable.
+		CreatedBy: actorFromContext(ctx),
 	}
-	ctx := r.Context()
 	if _, err := gw.Incident(ctx, inc); err != nil {
 		writeInternalError(w, "upsert incident", err)
 		return
@@ -2878,6 +2949,11 @@ func makeIncidentSubresourceHandler(conn *store.Conn, gw *govwrite.Writer) http.
 			writeJSON(w, http.StatusOK, inc)
 
 		case sub == "resolve" && r.Method == http.MethodPost:
+			// Closing an incident is a governed state change and needs the
+			// same gate as opening one; it was reachable with any valid token.
+			if !requireScope(w, r, domain.ScopeClaimsWrite) {
+				return
+			}
 			if err := gw.ResolveIncident(ctx, id, time.Now().UTC()); err != nil {
 				writeInternalError(w, "resolve incident", err)
 				return
