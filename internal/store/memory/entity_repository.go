@@ -70,6 +70,19 @@ func (r EntityRepository) LinkClaim(_ context.Context, claimID, entityID, role s
 	return nil
 }
 
+// UnlinkClaim drops every claim_entities row for the claim. Deleting
+// nothing is success, so a retried merge or delete converges.
+func (r EntityRepository) UnlinkClaim(_ context.Context, claimID string) error {
+	r.state.mu.Lock()
+	defer r.state.mu.Unlock()
+	for key := range r.state.claimEntities {
+		if key.ClaimID == claimID {
+			delete(r.state.claimEntities, key)
+		}
+	}
+	return nil
+}
+
 // List returns every entity ordered by name (matching the SQLite
 // ORDER BY name COLLATE NOCASE behaviour close enough for tests —
 // case-insensitive lexical sort on name).

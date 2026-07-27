@@ -57,14 +57,25 @@ CREATE TABLE IF NOT EXISTS claims (
   durability TEXT NOT NULL DEFAULT ''
 );
 
-CREATE INDEX IF NOT EXISTS idx_claims_scope_service ON claims(scope_service);
+-- No idx_claims_scope_service here: the runtime schema never created one, and
+-- nothing would use it — no SQL statement in this repo filters
+-- claims.scope_service, because scope is applied in Go after the rows come
+-- back. Declaring it here described an index no SQLite brain has ever had.
 CREATE INDEX IF NOT EXISTS idx_claims_lifecycle ON claims(lifecycle);
 
 CREATE INDEX IF NOT EXISTS idx_claims_trust_score ON claims(trust_score);
 CREATE INDEX IF NOT EXISTS idx_claims_valid_to ON claims(valid_to);
+-- Must match the runtime definition in internal/store/sqlite/db.go
+-- (postMigrateIndexes). This file is the sqlc codegen reference and is never
+-- applied to a live database, so a divergence here is silent: it read as the
+-- schema of record while no brain ever had that index.
+--
+-- Deliberately NOT partial on test_requirement_ref != '': SQLite only picks a
+-- partial index when the query's WHERE provably implies the index predicate,
+-- and the bound parameter could itself be '', so the partial variant is never
+-- chosen for ListClaimsByTestRequirementRef.
 CREATE INDEX IF NOT EXISTS idx_claims_test_requirement_ref
-  ON claims(test_requirement_ref)
-  WHERE test_requirement_ref != '';
+  ON claims(test_requirement_ref, type);
 
 CREATE TABLE IF NOT EXISTS entities (
   id TEXT PRIMARY KEY,

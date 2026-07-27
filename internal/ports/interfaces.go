@@ -91,12 +91,33 @@ type ClaimRepository interface {
 	// pipeline.ApplySemanticDedupe.
 	RepointEvidence(ctx context.Context, fromClaimID, toClaimID string) error
 
-	// DeleteCascade removes a claim and its dependent rows that are
-	// owned by the claim alone (claim_evidence by claim_id,
-	// claim_status_history by claim_id, the claim row itself). Rows
-	// owned by other entities (relationships, embeddings, claim
-	// entity links) must be cleaned up by the caller via the
-	// relevant repositories — DeleteCascade does not reach across
+	// DeleteCascade removes a claim and every row keyed on claim_id
+	// that the claim alone owns. The canonical cascade set, which
+	// every backend must clear in full for the tables it actually
+	// has, is:
+	//
+	//	claim_evidence
+	//	claim_status_history
+	//	claim_versions
+	//	claim_feedback
+	//	claim_expectations
+	//	claims (the row itself)
+	//
+	// "For the tables it actually has" is the whole contract: not
+	// every backend declares every side table (MySQL has none of
+	// versions/feedback/expectations; Postgres has expectations
+	// only), but a backend that HAS one and skips it leaves a row
+	// pointing at a claim that no longer exists — which is exactly
+	// how the same delete came to mean different things depending on
+	// the DSN. A new claim-keyed side table must be added here and to
+	// every backend that declares it.
+	//
+	// Rows owned by ANOTHER aggregate are deliberately out of scope
+	// and must be cleaned by the caller through the owning
+	// repository: relationships (RelationshipRepository),
+	// embeddings (EmbeddingRepository), claim_entities
+	// (EntityRepository.UnlinkClaim), decision_beliefs
+	// (DecisionRepository). DeleteCascade does not reach across
 	// repository boundaries.
 	DeleteCascade(ctx context.Context, claimID string) error
 
@@ -629,6 +650,16 @@ type GlobalSchemaRepository interface {
 type EntityRepository interface {
 	FindOrCreate(ctx context.Context, name string, etype domain.EntityType, createdBy string) (domain.Entity, error)
 	LinkClaim(ctx context.Context, claimID, entityID, role string) error
+	// UnlinkClaim drops every claim_entities row for claimID. It is
+	// the ONLY way a caller can reach that table by claim, and it is
+	// not a convenience: claim_entities has a foreign key to claims
+	// on the FK-enforcing backends, so a surviving link makes
+	// ClaimRepository.DeleteCascade fail outright. Semantic dedupe
+	// hit exactly that — the loser's evidence had already moved to
+	// the winner when the final DELETE aborted, leaving an active
+	// claim with zero evidence. Deleting nothing is success:
+	// the call is idempotent so a resumed pass converges.
+	UnlinkClaim(ctx context.Context, claimID string) error
 	List(ctx context.Context) ([]domain.Entity, error)
 	ListByType(ctx context.Context, etype domain.EntityType) ([]domain.Entity, error)
 	FindByName(ctx context.Context, name string) (domain.Entity, bool, error)

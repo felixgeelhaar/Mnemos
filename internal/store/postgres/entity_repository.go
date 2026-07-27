@@ -67,6 +67,18 @@ ON CONFLICT (claim_id, entity_id, role) DO NOTHING`, qualify(r.ns, "claim_entiti
 	return nil
 }
 
+// UnlinkClaim drops every claim_entities row for the claim. Deleting
+// nothing is success, so a retried merge or delete converges.
+func (r EntityRepository) UnlinkClaim(ctx context.Context, claimID string) error {
+	if _, err := r.db.ExecContext(ctx,
+		fmt.Sprintf(`DELETE FROM %s WHERE claim_id = $1`, qualify(r.ns, "claim_entities")),
+		claimID,
+	); err != nil {
+		return fmt.Errorf("unlink entities for claim %s: %w", claimID, err)
+	}
+	return nil
+}
+
 // List satisfies the corresponding ports method.
 func (r EntityRepository) List(ctx context.Context) ([]domain.Entity, error) {
 	rows, err := r.db.QueryContext(ctx, fmt.Sprintf(`

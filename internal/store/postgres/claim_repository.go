@@ -227,7 +227,16 @@ ON CONFLICT (claim_id, event_id) DO NOTHING`,
 	return nil
 }
 
-// DeleteCascade removes a claim plus its claim-owned dependent rows.
+// DeleteCascade removes a claim plus every claim-keyed row it owns.
+//
+// The set is the canonical one from [ports.ClaimRepository], narrowed to
+// the tables this backend declares: claim_evidence, claim_status_history,
+// claim_expectations, then the claim row. Postgres has no claim_versions
+// or claim_feedback table, so there is nothing to clear for those.
+// claim_expectations was previously skipped here while SQLite cleared it,
+// which is how the same delete left different residue per DSN — the
+// orphaned forward prediction then survived to be re-read against a claim
+// id that no longer resolves.
 func (r ClaimRepository) DeleteCascade(ctx context.Context, claimID string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -237,6 +246,7 @@ func (r ClaimRepository) DeleteCascade(ctx context.Context, claimID string) erro
 	for _, q := range []string{
 		fmt.Sprintf(`DELETE FROM %s WHERE claim_id = $1`, qualify(r.ns, "claim_evidence")),
 		fmt.Sprintf(`DELETE FROM %s WHERE claim_id = $1`, qualify(r.ns, "claim_status_history")),
+		fmt.Sprintf(`DELETE FROM %s WHERE claim_id = $1`, qualify(r.ns, "claim_expectations")),
 		fmt.Sprintf(`DELETE FROM %s WHERE id = $1`, qualify(r.ns, "claims")),
 	} {
 		if _, err := tx.ExecContext(ctx, q, claimID); err != nil {

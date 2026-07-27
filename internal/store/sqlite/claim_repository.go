@@ -568,11 +568,13 @@ func (r ClaimRepository) RepointEvidence(ctx context.Context, fromClaimID, toCla
 	return nil
 }
 
-// DeleteCascade removes a claim and the rows owned only by it
-// (claim_evidence by claim_id, claim_status_history by claim_id,
-// the claim row itself). Embeddings, relationships, and
-// claim_entities are owned by other repositories — callers must
-// clean those up separately. Single-tx for atomicity.
+// DeleteCascade removes a claim and every claim-keyed row it owns:
+// claim_evidence, claim_status_history, claim_versions,
+// claim_feedback, claim_expectations, then the claim row. That is the
+// full canonical set from [ports.ClaimRepository] — SQLite declares
+// all five side tables, so it clears all five. Embeddings,
+// relationships, and claim_entities belong to other repositories —
+// callers must clean those up separately. Single-tx for atomicity.
 func (r ClaimRepository) DeleteCascade(ctx context.Context, claimID string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -590,6 +592,9 @@ func (r ClaimRepository) DeleteCascade(ctx context.Context, claimID string) erro
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM claim_feedback WHERE claim_id = ?`, claimID); err != nil {
 		return fmt.Errorf("delete claim_feedback: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM claim_expectations WHERE claim_id = ?`, claimID); err != nil {
+		return fmt.Errorf("delete claim_expectations: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM claims WHERE id = ?`, claimID); err != nil {
 		return fmt.Errorf("delete claim: %w", err)

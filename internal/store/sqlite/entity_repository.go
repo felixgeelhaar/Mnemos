@@ -82,6 +82,15 @@ func (r EntityRepository) LinkClaim(ctx context.Context, claimID, entityID, role
 	})
 }
 
+// UnlinkClaim drops every claim_entities row for the claim. Deleting
+// nothing is success, so a merge or delete that is retried converges.
+func (r EntityRepository) UnlinkClaim(ctx context.Context, claimID string) error {
+	if err := r.q.DeleteClaimEntitiesByClaimID(ctx, claimID); err != nil {
+		return fmt.Errorf("unlink entities for claim %s: %w", claimID, err)
+	}
+	return nil
+}
+
 // List returns every entity ordered by name. Cheap; the entities
 // table is expected to stay small (~hundreds-to-low-thousands per
 // project) since canonicalisation collapses synonyms.
