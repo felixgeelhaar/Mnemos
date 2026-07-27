@@ -30,7 +30,25 @@ mnemos user create --name demo --email demo@example.com
 mnemos token issue --user usr_... --ttl 24h
 ```
 
-Reads are open. Writes require `Authorization: Bearer <token>`.
+**Secure by default since v0.85.1: every `/v1/*` and `/internal/*` endpoint
+requires `Authorization: Bearer <token>` — reads included.** A tokenless
+`GET /v1/beliefs` is a `401`. Only `/health`, `/healthz`, `/`, `/app` and the
+rate-limited `POST /v1/leads` are anonymous.
+
+If you deliberately want the old browsable-registry behaviour, opt in:
+
+- `serve --public-reads` (`MNEMOS_PUBLIC_READS`) — anonymous `GET`/`HEAD`/
+  `OPTIONS` on the data API. Warns at boot; ignored under `--require-tenant`.
+- `serve --metrics-public` (`MNEMOS_METRICS_PUBLIC`) — anonymous
+  `GET /internal/metrics` for a scrape on a trusted network. Deliberately not
+  covered by `--public-reads`.
+
+`/internal/ready` (version + DB write probe) is authenticated with no opt-out.
+
+The signing key comes from `MNEMOS_JWT_SECRET` (hex, ≥ 32 bytes) or
+`MNEMOS_AUTH_DIR/jwt-secret`, auto-created `0600` on first boot. Set it
+explicitly in production and plan a rotation cadence
+(`MNEMOS_JWT_PREV_SECRET` bridges the rollover).
 
 ## Compose templates
 
@@ -42,5 +60,5 @@ Production-shape compose files live under [`deploy/`](https://github.com/klarlab
 ## What the binary does NOT do
 
 - **No managed service.** Mnemos is the binary. There's no hosted version, no SOC2 reseller, no per-call meter. If you want one of those, pick a hosted competitor.
-- **No bundled UI.** A small registry browser ships at `/` (HTML at `web/index.html`); for a richer UI bring your own.
+- **No bundled UI.** A small registry browser ships at `/app` (HTML at `web/index.html`; `/` is the marketing landing page); for a richer UI bring your own.
 - **No automatic backup.** Use whatever your storage backend provides (`pg_dump`, `sqlite3 .backup`, etc).

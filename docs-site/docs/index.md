@@ -3,13 +3,15 @@
 **Self-hosted memory for AI apps.** No vendor cloud, no per-call billing, no SDK to install. Just a Go binary, an HTTP API, and your data.
 
 ```python
-import httpx, uuid
+import httpx, os, uuid
 
 m = "http://localhost:7777"
 run = str(uuid.uuid4())
+# Every /v1/* call needs a bearer token — reads included.
+h = {"Authorization": f"Bearer {os.environ['MNEMOS_JWT']}"}
 
 # Remember
-httpx.post(f"{m}/v1/events", json={"events": [{
+httpx.post(f"{m}/v1/episodes", headers=h, json={"episodes": [{
     "id": str(uuid.uuid4()),
     "run_id": run,
     "source_input_id": "chat-session-1",
@@ -19,7 +21,7 @@ httpx.post(f"{m}/v1/events", json={"events": [{
 }]})
 
 # Recall
-events = httpx.get(f"{m}/v1/events", params={"run_id": run}).json()
+episodes = httpx.get(f"{m}/v1/episodes", headers=h, params={"run_id": run}).json()
 ```
 
 ## What you get
