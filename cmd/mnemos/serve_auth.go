@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"go.klarlabs.de/bolt"
@@ -28,9 +29,71 @@ type scopesContextKey struct{}
 // context. Empty list (no key set) means no run restriction.
 type runsContextKey struct{}
 
-// withActor returns a copy of ctx carrying the given user id.
+// withActor returns a copy of ctx carrying the given user id. It also reports
+// the identity back up to the access log through the actor sink (see
+// actorSink) — middleware contexts only flow downward, so without the sink the
+// outermost log can never see who auth resolved.
 func withActor(ctx context.Context, userID string) context.Context {
+	actorSinkFromContext(ctx).set(userID)
 	return context.WithValue(ctx, actorContextKey{}, userID)
+}
+
+// actorSinkKey tags the mutable actor cell that the access-log middleware
+// installs before auth runs.
+type actorSinkKey struct{}
+
+// actorSink is that cell: a one-slot, concurrency-safe holder the access log
+// reads after the handler chain returns.
+//
+// Why it exists. jwtAuthMiddleware installs the token subject on a DERIVED
+// request, and a derived context is only visible to handlers BELOW it — so
+// boltAccessLog, which sits above auth, always read the bare request context
+// and logged user_id=<system> for every call. The log's stated purpose is
+// tracing writes back to the issuing identity, so it was reporting the one
+// field it exists for incorrectly.
+//
+// Why not simply move the log below auth: auth writes its own 401/403 and
+// returns WITHOUT calling downstream, so an inner log would stop recording
+// rejected requests — precisely the ones a security audit trail needs. The
+// sink keeps the log outermost (every request logged, denials included) while
+// still observing the identity resolved deeper in the stack.
+type actorSink struct {
+	mu sync.Mutex
+	id string
+}
+
+// set records the resolved identity. Nil-safe: contexts built outside the
+// serve stack (tests, the CLI hook paths) carry no sink.
+func (s *actorSink) set(id string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.id = id
+}
+
+// get returns the recorded identity, or "" when auth never resolved one.
+func (s *actorSink) get() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.id
+}
+
+// withActorSink installs a fresh sink on ctx and hands it back so the caller
+// can read it once the handler chain has run.
+func withActorSink(ctx context.Context) (context.Context, *actorSink) {
+	s := &actorSink{}
+	return context.WithValue(ctx, actorSinkKey{}, s), s
+}
+
+// actorSinkFromContext returns the installed sink, or nil.
+func actorSinkFromContext(ctx context.Context) *actorSink {
+	s, _ := ctx.Value(actorSinkKey{}).(*actorSink)
+	return s
 }
 
 // withScopes returns a copy of ctx carrying the bearer's scope list.
@@ -53,9 +116,50 @@ func allowedRunsFromContext(ctx context.Context) []string {
 	return nil
 }
 
-// (requireRunAllowed deferred until a single-record write path
-// needs it; appendEventsHandler currently does a batch pre-check
-// inline because the request shape gives the run ids up front.)
+// runAllowedForRequest reports whether the request's bearer may touch runID,
+// without writing a response. For batch pre-checks that phrase their own
+// error (which element of the payload offended); single-value call sites
+// should use requireRunScope instead.
+//
+// A bearer with no run allowlist is unrestricted. Matching delegates to
+// [auth.Claims.AllowsRun], so "*" and path.Match globs (`prod-*`) behave
+// identically over REST and MCP.
+func runAllowedForRequest(r *http.Request, runID string) bool {
+	allowed := allowedRunsFromContext(r.Context())
+	if len(allowed) == 0 {
+		return true
+	}
+	return auth.Claims{Runs: allowed}.AllowsRun(runID)
+}
+
+// requireRunScope confines a run-carrying request to the bearer's run
+// allowlist, writing a 403 and returning false when it must not proceed.
+// A bearer with no allowlist (the unrestricted default) passes anything,
+// including an empty runID.
+//
+// It FAILS CLOSED on an absent run id, and that is the point. run_id is an
+// OPTIONAL filter on the read surface (/v1/episodes, /v1/beliefs,
+// /v1/search) — so a run-scoped token that simply omitted the parameter used
+// to receive the whole corpus, turning "confined to run X" into "may read
+// every run". A token that names runs must name one.
+//
+// Destructive and write paths call it with a run id that is already required
+// by the route, so the empty-id branch never fires there.
+func requireRunScope(w http.ResponseWriter, r *http.Request, runID string) bool {
+	if len(allowedRunsFromContext(r.Context())) == 0 {
+		return true
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		writeError(w, http.StatusForbidden, "token is run-scoped: run_id is required")
+		return false
+	}
+	if !runAllowedForRequest(r, runID) {
+		writeError(w, http.StatusForbidden, fmt.Sprintf("run_id %q not in token whitelist", runID))
+		return false
+	}
+	return true
+}
 
 // actorFromContext returns the user id previously installed via withActor.
 // When the request is unauthenticated (reads), falls back to SystemUser so
@@ -224,13 +328,24 @@ func panicRecover(logger *bolt.Logger, h http.Handler) http.Handler {
 // log per request. Uses bolt so field names match the rest of the
 // codebase; `user_id` is included when authentication resolved an actor
 // so we can trace writes back to the issuing identity.
+//
+// It installs an actorSink before delegating: auth runs BELOW this
+// middleware and can only publish the token subject onto a derived context
+// this frame never sees, so the sink is how the identity travels back up.
+// Requests auth rejects (401/403) carry no subject and log <system> — which
+// is accurate, since no identity was established.
 func boltAccessLog(logger *bolt.Logger, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		ctx, sink := withActorSink(r.Context())
+		r = r.WithContext(ctx)
 		rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		h.ServeHTTP(rw, r)
 
-		actor := actorFromContext(r.Context())
+		actor := sink.get()
+		if actor == "" {
+			actor = actorFromContext(r.Context())
+		}
 		logger.Info().
 			Str("request_id", requestIDFromContext(r.Context())).
 			Str("method", r.Method).

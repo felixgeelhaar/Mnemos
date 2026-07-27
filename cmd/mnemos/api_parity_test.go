@@ -30,6 +30,32 @@ import (
 // This is the cheapest fitness function for surface drift — no app
 // layer refactor required, no IDL — and it catches the failure mode
 // that motivated the task: "we forgot to add this to gRPC".
+//
+// WHAT IT DOES NOT PROTECT. Read this before trusting it.
+//
+// It compares NAMES. It cannot see that two surfaces exposing the same name
+// behave differently, and that is where the real drift has happened:
+//
+//   - /v1/search and query_knowledge were both registered, both listed here,
+//     and built query engines with different capabilities — one ranked by
+//     embeddings and full text, the other by token overlap. Same name, same
+//     matrix row, different product.
+//   - memory_context lacked the `query` input that /v1/context accepted.
+//   - AnswerOptions.Consumer was reachable from one surface only.
+//
+// It also scans exactly three surfaces. The EMBEDDED LIBRARY (the root
+// `mnemos` package, memory.go / memory_impl.go) is not one of them — and that
+// is the surface every consuming product actually uses. Two of the three
+// defects above were worst there.
+//
+// Adding a fourth column was considered and rejected: the Memory interface has
+// ~42 methods against ~123 matrix entries here, most with no transport
+// analogue, so it would be mostly parityNA — a matrix nobody maintains, which
+// is worse than a boundary stated plainly.
+//
+// Behavioural parity needs construction-site fitness functions instead, of the
+// shape in internal/query/cognitive_wiring_test.go: assert at the point where
+// the options/engine are BUILT, not at the point where a name is registered.
 func TestAPISurfaceParity(t *testing.T) {
 	root, err := repoRoot()
 	if err != nil {

@@ -160,6 +160,14 @@ plasticity:
   # per-belief metaplasticity (crystallization) on. Only consulted with --plastic.
   sensitivity:         # MNEMOS_PLASTICITY_SENSITIVITY (float >= 0, default 1.0)
 
+pipeline:
+  # Additive operational-event typing (ADR 0023 part 2): tags the source events
+  # of deploy/release/merge/incident claims with an event_type so timeline_query
+  # surfaces them as typed episodes. Purely additive — it never drops a belief.
+  # Off by default because the classifier is rule-based (~78% precision), which
+  # is fine for an extra tag but not something to impose on every install.
+  episodic_events:     # MNEMOS_EPISODIC_EVENTS (truthy, default off)
+
 metrics:
   # How often `mnemos serve` samples product + cognitive metrics for Prometheus
   # (ADR 0020): counts, trust, free-energy, calibration, dissonance, brain-health
