@@ -73,12 +73,15 @@ const (
 // Bounds reports the limits a bounded cognitive read applied, so a caller can tell
 // a complete answer from a truncated one. A zero Bounds means "nothing was cut".
 type Bounds struct {
-	// Truncated is true when the answer is a bounded subset of what the corpus
-	// could have yielded. It is the one field a caller must not ignore.
+	// Truncated is true when results were WITHHELD — the answer is a bounded
+	// subset of what the corpus could have yielded. It is the one field a caller
+	// must not ignore. A caller-supplied limit that was merely capped without
+	// costing any result does not set it (see finish); Reasons still records it.
 	Truncated bool `json:"truncated"`
 
 	// Reasons lists every bound that bit (see the BoundReason* codes), in
-	// application order. Empty when Truncated is false.
+	// application order. May be non-empty with Truncated false when the only
+	// bound was a capped caller limit that cost nothing.
 	Reasons []string `json:"reasons,omitempty"`
 
 	// Scanned is how many corpus items the read examined (claims, edges — see the
@@ -115,8 +118,18 @@ func (b *Bounds) cut(reason string) {
 	b.Reasons = append(b.Reasons, reason)
 }
 
-// finish renders [Bounds.Notice] from whatever was recorded. Call once, last.
+// finish settles Truncated and renders [Bounds.Notice] from whatever was
+// recorded. Call once, last.
 func (b *Bounds) finish(returned int) {
+	// [BoundReasonLimitCapped] on its own is a POLICY note, not a truncation: the
+	// caller asked for more than the server allows, but if everything that
+	// qualified still fit, nothing was withheld. Truncated has to keep meaning
+	// "you are not looking at the whole answer" or callers will learn to ignore
+	// it. The reason stays in Reasons either way, and Limit shows what the
+	// caller actually got.
+	if b.Truncated && len(b.Reasons) == 1 && b.Reasons[0] == BoundReasonLimitCapped && b.Available <= returned {
+		b.Truncated = false
+	}
 	if !b.Truncated {
 		b.Notice = ""
 		return
