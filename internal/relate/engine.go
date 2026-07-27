@@ -234,109 +234,6 @@ func (e Engine) Detect(claims []domain.Claim) ([]domain.Relationship, error) {
 	return rels, nil
 }
 
-// DetectIncremental compares each new claim against all existing claims and
-// returns inferred relationships. It does NOT compare existing claims against
-// each other, making it suitable for incremental processing where the existing
-// claims have already been compared in a prior pass.
-func (e Engine) DetectIncremental(newClaims []domain.Claim, existingClaims []domain.Claim) ([]domain.Relationship, error) {
-	if len(newClaims) == 0 || len(existingClaims) == 0 {
-		return nil, nil
-	}
-
-	rels := make([]domain.Relationship, 0)
-	now := e.now().UTC()
-
-	type analyzed struct {
-		text   string
-		tokens map[string]struct{}
-		neg    bool
-	}
-
-	newCache := make([]analyzed, len(newClaims))
-	for i := range newClaims {
-		tokens, neg := contentTokensAndPolarity(newClaims[i].Text)
-		newCache[i] = analyzed{text: newClaims[i].Text, tokens: tokens, neg: neg}
-	}
-
-	existCache := make([]analyzed, len(existingClaims))
-	for i := range existingClaims {
-		tokens, neg := contentTokensAndPolarity(existingClaims[i].Text)
-		existCache[i] = analyzed{text: existingClaims[i].Text, tokens: tokens, neg: neg}
-	}
-
-	for i := 0; i < len(newClaims); i++ {
-		if len(newCache[i].tokens) == 0 {
-			continue
-		}
-		for j := 0; j < len(existingClaims); j++ {
-			if len(existCache[j].tokens) == 0 {
-				continue
-			}
-
-			relType, ok := inferRelationship(newCache[i].tokens, newCache[i].neg, existCache[j].tokens, existCache[j].neg)
-			if detectNumericDivergence(newCache[i].text, existCache[j].text, newCache[i].tokens, existCache[j].tokens) {
-				relType = domain.RelationshipTypeContradicts
-				ok = true
-			}
-			if !ok && detectEntityRoleDivergence(newCache[i].text, existCache[j].text, newCache[i].tokens, existCache[j].tokens) {
-				relType = domain.RelationshipTypeContradicts
-				ok = true
-			}
-			if !ok && detectTemporalDivergence(newCache[i].text, existCache[j].text, newCache[i].tokens, existCache[j].tokens) {
-				relType = domain.RelationshipTypeContradicts
-				ok = true
-			}
-			if !ok {
-				continue
-			}
-			if suppressAsSessionNoise(relType, newClaims[i], existingClaims[j]) {
-				continue
-			}
-
-			id, err := e.nextID()
-			if err != nil {
-				return nil, err
-			}
-
-			rels = append(rels, domain.Relationship{
-				ID:          id,
-				Type:        relType,
-				FromClaimID: newClaims[i].ID,
-				ToClaimID:   existingClaims[j].ID,
-				CreatedAt:   now,
-			})
-		}
-	}
-
-	// Citation edges from new claims to any known claim IDs in scope
-	// (existing + new batch). This keeps citation graph tracking active
-	// in incremental ingest paths.
-	claimByID := make(map[string]struct{}, len(newClaims)+len(existingClaims))
-	for _, c := range existingClaims {
-		claimByID[c.ID] = struct{}{}
-	}
-	for _, c := range newClaims {
-		claimByID[c.ID] = struct{}{}
-	}
-	var err error
-	rels, err = e.appendCitationRelationships(rels, newClaims, claimByID, now)
-	if err != nil {
-		return nil, err
-	}
-
-	// Test-conflict detection across new + existing test_result claims.
-	allClaims := make([]domain.Claim, 0, len(newClaims)+len(existingClaims))
-	allClaims = append(allClaims, newClaims...)
-	allClaims = append(allClaims, existingClaims...)
-	testRels, err := e.DetectTestConflicts(allClaims)
-	if err != nil {
-		return nil, err
-	}
-	rels = mergeRelationships(rels, testRels)
-
-	return rels, nil
-}
-
 func (e Engine) appendCitationRelationships(rels []domain.Relationship, fromClaims []domain.Claim, validClaimIDs map[string]struct{}, now time.Time) ([]domain.Relationship, error) {
 	seen := make(map[string]struct{}, len(rels))
 	for _, r := range rels {
@@ -649,8 +546,21 @@ func ContentTokens(text string) map[string]struct{} {
 // contentTokensAndPolarity splits text into content tokens (stop words removed)
 // and detects whether the text contains negation.
 func contentTokensAndPolarity(text string) (map[string]struct{}, bool) {
+	tokens := make(map[string]struct{}, 12)
+	neg := tokenizeContentInto(tokens, text)
+	return tokens, neg
+}
+
+// tokenizeContentInto is the shared core of content tokenization: it adds text's
+// content tokens to dst and reports whether the text is negated.
+//
+// The incremental path indexes tens of thousands of claims per write and cannot
+// afford a fresh map per claim, so it calls this with one reusable scratch set.
+// Keeping a single implementation is deliberate: two tokenizers that disagree
+// by one stop word would make the candidate index drop real pairs, and the
+// failure would be silent.
+func tokenizeContentInto(dst map[string]struct{}, text string) bool {
 	words := strings.Fields(strings.ToLower(text))
-	tokens := make(map[string]struct{}, len(words))
 	neg := false
 	for i, w := range words {
 		w = strings.Trim(w, ",.;:!?()[]{}\"'")
@@ -670,9 +580,9 @@ func contentTokensAndPolarity(text string) (map[string]struct{}, bool) {
 		if _, ok := stopWords[w]; ok {
 			continue
 		}
-		tokens[stemWord(w)] = struct{}{}
+		dst[stemWord(w)] = struct{}{}
 	}
-	return tokens, neg
+	return neg
 }
 
 // contrastiveHedges are the words that, following a negation, mark it as
@@ -733,8 +643,18 @@ func inferRelationship(aTokens map[string]struct{}, aNeg bool, bTokens map[strin
 }
 
 func inferRelationshipWithContext(aTokens map[string]struct{}, aNeg bool, bTokens map[string]struct{}, bNeg bool, skipValueDivergence bool) (domain.RelationshipType, bool) {
-	overlap := contentOverlap(aTokens, bTokens)
+	return inferRelationshipFromOverlapWithContext(contentOverlap(aTokens, bTokens), aTokens, aNeg, bTokens, bNeg, skipValueDivergence)
+}
 
+// inferRelationshipFromOverlap is inferRelationship with the content overlap
+// supplied by the caller. The candidate index computes the overlap as a side
+// effect of finding the candidate at all, so recomputing it here would be pure
+// duplicated work.
+func inferRelationshipFromOverlap(overlap int, aTokens map[string]struct{}, aNeg bool, bTokens map[string]struct{}, bNeg bool) (domain.RelationshipType, bool) {
+	return inferRelationshipFromOverlapWithContext(overlap, aTokens, aNeg, bTokens, bNeg, false)
+}
+
+func inferRelationshipFromOverlapWithContext(overlap int, aTokens map[string]struct{}, aNeg bool, bTokens map[string]struct{}, bNeg bool, skipValueDivergence bool) (domain.RelationshipType, bool) {
 	// Primary path: sufficient token overlap.
 	if overlap >= minContentTokenOverlap {
 		shorter := len(aTokens)
@@ -781,7 +701,7 @@ func inferRelationshipWithContext(aTokens map[string]struct{}, aNeg bool, bToken
 	// Claims that share most tokens but differ on 1 key token are competing
 	// alternatives (e.g., "use PostgreSQL" vs "prefers MySQL").
 	// Skipped for pairs of enumerated list items (Phase 1 vs Phase 2).
-	if !skipValueDivergence && detectValueDivergence(aTokens, bTokens) {
+	if !skipValueDivergence && valueDivergesFromOverlap(len(aTokens), len(bTokens), overlap) {
 		return domain.RelationshipTypeContradicts, true
 	}
 
@@ -808,12 +728,18 @@ func isEnumeratedItem(text string) bool {
 // items (e.g., "Phase 1: ..." vs "Phase 2: ...") which share tokens but are
 // parallel items, not competing alternatives.
 func detectValueDivergence(a, b map[string]struct{}) bool {
-	la, lb := len(a), len(b)
+	return valueDivergesFromOverlap(len(a), len(b), contentOverlap(a, b))
+}
+
+// valueDivergesFromOverlap is detectValueDivergence expressed over the token
+// counts and the overlap alone — it never needed the sets themselves. Taking
+// the overlap as an argument lets the incremental path reuse the count the
+// candidate index already produced.
+func valueDivergesFromOverlap(la, lb, overlap int) bool {
 	if la < 2 || lb < 2 {
 		return false
 	}
 
-	overlap := contentOverlap(a, b)
 	onlyA := la - overlap
 	onlyB := lb - overlap
 
