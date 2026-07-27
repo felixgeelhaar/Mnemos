@@ -206,6 +206,26 @@ func floatsClose(a, b float64) bool {
 func detectNumericDivergence(aText, bText string, aTokens, bTokens map[string]struct{}) bool {
 	aNums := extractNumerics(aText)
 	bNums := extractNumerics(bText)
+	// Bail before building the word-token sets, exactly as the single-function
+	// version did. Keeping the wrapper's evaluation ORDER faithful matters
+	// beyond taste: the benchmark that establishes the "before" number calls
+	// through here, and eagerly building two maps the original never built
+	// would flatter the change.
+	if len(aNums) == 0 || len(bNums) == 0 {
+		return false
+	}
+	return numericDivergesPre(aNums, wordTokens(aTokens), bNums, wordTokens(bTokens))
+}
+
+// numericDivergesPre is detectNumericDivergence with the per-claim derivations
+// (the numeric literals and the word-token subset) supplied by the caller.
+//
+// Both derivations are functions of one claim, but the pairwise loop used to
+// recompute all four of them for every pair — including a regex scan of both
+// full texts. Against an N-claim corpus that is 2N regex scans per new claim to
+// produce at most a handful of edges. Hoisting them lets the incremental path
+// derive each claim's numerics once.
+func numericDivergesPre(aNums []numericValue, aWords map[string]struct{}, bNums []numericValue, bWords map[string]struct{}) bool {
 	if len(aNums) == 0 || len(bNums) == 0 {
 		return false
 	}
@@ -220,8 +240,6 @@ func detectNumericDivergence(aText, bText string, aTokens, bTokens map[string]st
 	// "269 → 9" tokenizes to [9, 269, →]; against a compose-file claim
 	// containing "9 → 6" it shared {9, →}, scoring 0.67 and clearing the 0.5
 	// bar on nothing but a digit and an arrow.
-	aWords := wordTokens(aTokens)
-	bWords := wordTokens(bTokens)
 	overlap := contentOverlap(aWords, bWords)
 	if overlap < 1 {
 		return false

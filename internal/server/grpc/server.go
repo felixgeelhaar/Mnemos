@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -112,10 +114,11 @@ func (s *Server) WithPublicReads() *Server {
 	return s
 }
 
-// tenant context plumbing (per-request scoped conn/writer + the effective
-// tenant), stashed by the interceptor and read by the *For accessors.
+// tenant context plumbing (per-request scoped conn/writer/memory + the
+// effective tenant), stashed by the interceptor and read by the *For accessors.
 type tenantConnKey struct{}
 type tenantWriterKey struct{}
+type tenantMemKey struct{}
 type tenantKey struct{}
 
 func withTenant(ctx context.Context, t string) context.Context {
@@ -143,25 +146,111 @@ func (s *Server) writerFor(ctx context.Context) *govwrite.Writer {
 	return s.writer
 }
 
-// memFor returns a per-tenant Memory view (cached) or the shared facade. When a
-// tenant IS present but its view can't be opened, it returns nil (fail closed)
-// so the cognitive RPCs' nil-guard yields codes.Unavailable — never the shared
+// requestMem is a lazily-built, request-scoped tenant Memory view, stashed by
+// the interceptor and closed when the RPC returns.
+//
+// It exists because a Memory owns a store connection, and under the Postgres
+// shared-pool mode (MNEMOS_PG_SHARED_POOL, ADR 0007 Phase 2) that connection is
+// ONE *sql.Conn checked out of a single process-wide pool, whose Closer resets
+// the mnemos.tenant GUC and hands it back. A process-lifetime cache of such a
+// facade never closes it, so the connection never returns to the pool: one
+// permanently pinned connection per tenant, until the pool is exhausted and
+// every tenant stalls waiting for a checkout that can never happen. The
+// cmd-side read-conn cache already declines to cache under this mode
+// (enableConnCache); this is the same decision for the cognitive path.
+//
+// Lazy rather than eagerly built in the interceptor: building a facade opens a
+// connection and boots the query/chronos wiring, and most RPCs never touch the
+// cognitive layer. Only a request that actually calls memFor pays for one.
+type requestMem struct {
+	mu    sync.Mutex
+	built bool
+	mem   mnemos.Memory
+}
+
+// get returns the request's tenant view, building it on first use. A build
+// failure is remembered as nil so the caller's nil-guard fails the RPC closed
+// rather than retrying an open that is not going to start working mid-request.
+func (r *requestMem) get(base mnemos.Memory, tenant string) mnemos.Memory {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.built {
+		r.built = true
+		if m, err := base.Tenant(tenant); err == nil {
+			r.mem = m
+		}
+	}
+	return r.mem
+}
+
+// close releases the view and, with it, the connection the facade holds.
+func (r *requestMem) close() error {
+	r.mu.Lock()
+	m := r.mem
+	r.mem = nil
+	r.mu.Unlock()
+	if m == nil {
+		return nil
+	}
+	return m.Close()
+}
+
+// tenantMemCacheSafe reports whether a per-tenant Memory view may be cached for
+// the life of the process. It is not under the Postgres shared-pool mode: see
+// requestMem for why a cached facade there pins a pooled connection forever.
+// Mirrors enableConnCache's env test — same variable, same reading.
+func tenantMemCacheSafe() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MNEMOS_PG_SHARED_POOL"))) {
+	case "1", "true", "yes":
+		return false
+	}
+	return true
+}
+
+// memFor returns a per-tenant Memory view or the shared facade. When a tenant IS
+// present but its view can't be opened, it returns nil (fail closed) so the
+// cognitive RPCs' nil-guard yields codes.Unavailable — never the shared
 // __default__ facade, which would serve the wrong partition's data.
+//
+// The view is normally cached per tenant for the life of the process. When the
+// interceptor decided caching is unsafe it stashed a request-scoped holder
+// instead (see requestMem); this reads that first, so every call within one RPC
+// still gets the same instance and it is closed when the RPC returns.
 func (s *Server) memFor(ctx context.Context) mnemos.Memory {
 	tenant, ok := tenantFromContext(ctx)
 	if !ok || s.mem == nil {
 		return s.mem
 	}
+	if rm, ok := ctx.Value(tenantMemKey{}).(*requestMem); ok && rm != nil {
+		return rm.get(s.mem, tenant)
+	}
+
 	s.tenantMemMu.Lock()
-	defer s.tenantMemMu.Unlock()
-	if m, cached := s.tenantMems[tenant]; cached {
+	m, cached := s.tenantMems[tenant]
+	s.tenantMemMu.Unlock()
+	if cached {
 		return m
 	}
+
+	// Built WITHOUT the lock held. Tenant() opens a connection, so holding the
+	// mutex across it made one slow dial block every other tenant's memFor —
+	// and Close(), which takes the same mutex, so a shutdown during a stalled
+	// open hung instead of proceeding. Same shape as openConn's cache in
+	// cmd/mnemos/dsn.go (#150).
 	tm, err := s.mem.Tenant(tenant)
 	if err != nil {
 		return nil
 	}
+	s.tenantMemMu.Lock()
+	if existing, ok := s.tenantMems[tenant]; ok {
+		// Lost the race to open the same tenant concurrently — keep the winner
+		// and close our redundant view, which owns a connection of its own.
+		s.tenantMemMu.Unlock()
+		_ = tm.Close()
+		return existing
+	}
 	s.tenantMems[tenant] = tm
+	s.tenantMemMu.Unlock()
 	return tm
 }
 
@@ -259,6 +348,21 @@ func (s *Server) UnaryInterceptor() grpc.UnaryServerInterceptor {
 			}
 			defer func() { _ = tw.Close() }()
 			ctx = context.WithValue(ctx, tenantWriterKey{}, tw)
+		}
+
+		// The cognitive path's per-tenant Memory view. Cached process-wide by
+		// default; under the Postgres shared-pool mode a cached facade would pin
+		// its pooled connection for good, so scope it to the request instead and
+		// close it here. Stashed for any tenant request (not only tenant-scoping
+		// mode) so the lifetime rule holds wherever a tenant reaches memFor.
+		if _, ok := tenantFromContext(ctx); ok && s.mem != nil && !tenantMemCacheSafe() {
+			rm := &requestMem{}
+			defer func() {
+				if cerr := rm.close(); cerr != nil {
+					s.logger.Warn().Str("method", info.FullMethod).Str("error", cerr.Error()).Msg("close request memory")
+				}
+			}()
+			ctx = context.WithValue(ctx, tenantMemKey{}, rm)
 		}
 
 		resp, err = handler(ctx, req)
@@ -1008,11 +1112,76 @@ func (s *Server) AppendEmbeddings(ctx context.Context, req *mnemosv1.AppendEmbed
 // ---------------------------------------------------------------------------
 
 // Metrics returns aggregate counts (events, claims, contradictions, embeddings) and the running version.
+//
+// F.4.b on the read side. These are aggregates, but an aggregate over runs the
+// token cannot read is still a read of them: "how many episodes exist" and "how
+// many beliefs are contested" leak the size and health of every other run's
+// graph, and differencing successive calls leaks its activity. MetricsRequest
+// carries no run_id, so — exactly as in ListEpisodes — "reject a request for
+// someone else's run" is not expressible and the only fail-closed reading is to
+// compute the aggregates over the whitelist alone. Episodes with no run at all
+// are excluded: a run-scoped token was granted named runs, and "unassigned" is
+// not one of them.
 func (s *Server) Metrics(ctx context.Context, _ *mnemosv1.MetricsRequest) (*mnemosv1.MetricsResponse, error) {
 	events, _ := s.connFor(ctx).Events.ListAll(ctx)
 	claims, _ := s.connFor(ctx).Claims.ListAll(ctx)
 	eventEmbs, _ := s.connFor(ctx).Embeddings.ListByEntityType(ctx, "event")
 	claimEmbs, _ := s.connFor(ctx).Embeddings.ListByEntityType(ctx, "claim")
+
+	if allowed := allowedRunsFromContext(ctx); len(allowed) > 0 {
+		keptEvents := events[:0]
+		allowedEventIDs := map[string]struct{}{}
+		for _, e := range events {
+			if runAllowed(allowed, e.RunID) {
+				keptEvents = append(keptEvents, e)
+				allowedEventIDs[e.ID] = struct{}{}
+			}
+		}
+		events = keptEvents
+
+		// A belief's run is only reachable through its evidence links — the same
+		// route ListBeliefs takes for its run_id filter.
+		claimIDs := make([]string, 0, len(claims))
+		for _, c := range claims {
+			claimIDs = append(claimIDs, c.ID)
+		}
+		visibleClaims := map[string]struct{}{}
+		if len(claimIDs) > 0 && len(allowedEventIDs) > 0 {
+			links, err := s.connFor(ctx).Claims.ListEvidenceByClaimIDs(ctx, claimIDs)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "load evidence for run scope: %v", err)
+			}
+			for _, l := range links {
+				if _, ok := allowedEventIDs[l.EventID]; ok {
+					visibleClaims[l.ClaimID] = struct{}{}
+				}
+			}
+		}
+		keptClaims := claims[:0]
+		for _, c := range claims {
+			if _, ok := visibleClaims[c.ID]; ok {
+				keptClaims = append(keptClaims, c)
+			}
+		}
+		claims = keptClaims
+
+		// An embedding is an index entry for its entity, so it is legible
+		// exactly when its entity is.
+		keptEventEmbs := eventEmbs[:0]
+		for _, e := range eventEmbs {
+			if _, ok := allowedEventIDs[e.EntityID]; ok {
+				keptEventEmbs = append(keptEventEmbs, e)
+			}
+		}
+		eventEmbs = keptEventEmbs
+		keptClaimEmbs := claimEmbs[:0]
+		for _, e := range claimEmbs {
+			if _, ok := visibleClaims[e.EntityID]; ok {
+				keptClaimEmbs = append(keptClaimEmbs, e)
+			}
+		}
+		claimEmbs = keptClaimEmbs
+	}
 
 	runs := map[string]struct{}{}
 	for _, e := range events {
@@ -1026,6 +1195,8 @@ func (s *Server) Metrics(ctx context.Context, _ *mnemosv1.MetricsRequest) (*mnem
 			contestedClaims++
 		}
 	}
+	// Associations and dissonances are counted from the surviving beliefs, so
+	// the run narrowing above carries into them without a second filter.
 	ids := make([]string, 0, len(claims))
 	for _, c := range claims {
 		ids = append(ids, c.ID)
