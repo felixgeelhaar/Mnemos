@@ -157,11 +157,13 @@ func buildBenchCorpus(tb testing.TB, n int) *benchCorpus {
 		text := fmt.Sprintf("%s observation number %d in the %s subsystem", topic, i, topic)
 
 		ev := domain.Event{
-			ID:         eventID,
-			Content:    text,
-			Timestamp:  now.Add(-time.Duration(i) * time.Minute),
-			IngestedAt: now,
-			RunID:      "bench-run",
+			ID:            eventID,
+			SourceInputID: "bench-input",
+			SchemaVersion: "v1",
+			Content:       text,
+			Timestamp:     now.Add(-time.Duration(i) * time.Minute),
+			IngestedAt:    now,
+			RunID:         "bench-run",
 		}
 		if err := conn.Events.Append(ctx, ev); err != nil {
 			tb.Fatalf("append event %d: %v", i, err)
@@ -235,4 +237,62 @@ func BenchmarkRecall_SQLite(b *testing.B) {
 			b.ReportMetric(float64(c.embeds.searchCalls)/float64(b.N), "vsearch/op")
 		})
 	}
+}
+
+// BenchmarkRecallLegs_SQLite attributes the cost of one recall to its parts so
+// the bottleneck is evidence, not assumption:
+//
+//	events-listall  — loading every event row (the corpus-wide path)
+//	event-cosine    — materialising every event vector and cosining in Go
+//	claim-cosine    — materialising every CLAIM vector to score a handful of
+//	                  admitted candidates (this leg runs on EVERY recall,
+//	                  including the pgvector fast path)
+//
+// Read `vectors/op`; ns/op is min-of-N-noisy on a shared machine.
+func BenchmarkRecallLegs_SQLite(b *testing.B) {
+	const n = 10000
+	c := buildBenchCorpus(b, n)
+	ctx := context.Background()
+	const q = "why is payments latency high?"
+
+	allEvents, err := c.conn.Events.(eventLister).ListAll(ctx)
+	if err != nil {
+		b.Fatalf("list events: %v", err)
+	}
+	// The claim set a real recall actually scores: claims attached to the
+	// top-5 ranked events. A handful of rows, against a 10k-vector table.
+	admitted, err := c.conn.Claims.ListByEventIDs(ctx, []string{
+		"ev-000000", "ev-000010", "ev-000020", "ev-000030", "ev-000040",
+	})
+	if err != nil {
+		b.Fatalf("list claims: %v", err)
+	}
+
+	b.Run("events-listall", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if _, err := c.conn.Events.(eventLister).ListAll(ctx); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("event-cosine", func(b *testing.B) {
+		c.embeds.reset()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			c.engine.cosineEventScores(ctx, q, allEvents)
+		}
+		b.StopTimer()
+		b.ReportMetric(float64(c.embeds.vectorsMaterialised)/float64(b.N), "vectors/op")
+	})
+	b.Run("claim-cosine", func(b *testing.B) {
+		c.embeds.reset()
+		b.ReportAllocs()
+		b.ReportMetric(float64(len(admitted)), "candidates")
+		for i := 0; i < b.N; i++ {
+			c.engine.cosineClaimScores(ctx, q, admitted)
+		}
+		b.StopTimer()
+		b.ReportMetric(float64(c.embeds.vectorsMaterialised)/float64(b.N), "vectors/op")
+	})
 }
