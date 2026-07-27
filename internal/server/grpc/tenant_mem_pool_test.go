@@ -99,6 +99,18 @@ func TestGRPC_SharedPool_TenantMemoryDoesNotPinConnections(t *testing.T) {
 		return n
 	}
 
+	// The connection-pinning half of this test is about pool accounting and
+	// runs on any role. The cross-tenant half at the end needs RLS actually
+	// enforced, which a superuser (or a rolbypassrls role) does not do — CI's
+	// Postgres service runs as one, so that assertion is reported and skipped
+	// there rather than failing on a leak the role itself created.
+	rlsEnforced := true
+	var bypass bool
+	if err := querier.QueryRowContext(ctx,
+		"SELECT rolbypassrls OR rolsuper FROM pg_roles WHERE rolname = current_user").Scan(&bypass); err == nil && bypass {
+		rlsEnforced = false
+	}
+
 	// A real facade over the same DSN: .Tenant(id) is what checks a connection
 	// out of the shared pool.
 	mem, err := mnemos.New(mnemos.WithStorage(baseDSN))
@@ -187,6 +199,11 @@ func TestGRPC_SharedPool_TenantMemoryDoesNotPinConnections(t *testing.T) {
 				t.Fatalf("tenant %s WhoKnows #%d: %v (pool exhausted by pinned per-tenant facades?)", tn, i, err)
 			}
 		}
+	}
+
+	if !rlsEnforced {
+		t.Log("connecting role bypasses RLS; skipping the recycled-connection isolation assertion (use a non-superuser role)")
+		return
 	}
 
 	// Recycled connections must not carry the previous tenant. With a pool this
