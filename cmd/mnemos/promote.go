@@ -259,6 +259,20 @@ type writeCounts struct {
 // GateAuto survivors (res.Promoted) are written Active; GateOperator survivors
 // (res.Pending) are written Pending. Dissonant and skipped candidates are never
 // written. Only de-identified fields cross (via ToGlobalSchema).
+//
+// Re-promotion refreshes the evidence, never the verdict. GlobalSchemaID is
+// content-addressed, so every pass upserts the SAME row for a recurring
+// schema — and the repository's upsert overwrites every column, status
+// included. A schema an operator had already approved (`--promote approve`,
+// pending → active) therefore reverted to pending on the next
+// `--promote --gate operator --apply`, silently un-doing a human decision that
+// nothing in the run had re-examined. Approval is a human act; only `approve`
+// grants it, and only an explicit revocation should take it away.
+//
+// So the corroboration/confidence/surprise figures — the things this pass
+// actually recomputed — are written through, while an existing ACTIVE row keeps
+// its status, its original promoted_at, and the actor recorded on it: the audit
+// trail of when and by whom it entered force.
 func applyPromotion(ctx context.Context, globalDSN string, res consolidate.Result) (writeCounts, error) {
 	var wc writeCounts
 	if globalDSN == "" {
@@ -274,24 +288,61 @@ func applyPromotion(ctx context.Context, globalDSN string, res consolidate.Resul
 	}
 
 	now := time.Now().UTC()
-	write := func(cands []consolidate.PromotedLesson, status domain.GlobalSchemaStatus) error {
+	write := func(cands []consolidate.PromotedLesson, status domain.GlobalSchemaStatus) (int, error) {
+		written := 0
 		for _, c := range cands {
 			gs := c.ToGlobalSchema(status, now, domain.SystemUser)
+			prior, found, err := conn.GlobalSchemas.GetByID(ctx, gs.ID)
+			if err != nil {
+				return written, NewSystemError(err, "read existing global schema %q", gs.ID)
+			}
+			if found {
+				gs = preserveApproval(gs, prior)
+			}
 			if err := conn.GlobalSchemas.Upsert(ctx, gs); err != nil {
-				return NewSystemError(err, "persist global schema %q", gs.ID)
+				return written, NewSystemError(err, "persist global schema %q", gs.ID)
+			}
+			if gs.Status == domain.GlobalSchemaStatusActive {
+				written++
 			}
 		}
-		return nil
+		return written, nil
 	}
-	if err := write(res.Promoted, domain.GlobalSchemaStatusActive); err != nil {
+	activeFromAuto, err := write(res.Promoted, domain.GlobalSchemaStatusActive)
+	if err != nil {
 		return wc, err
 	}
-	if err := write(res.Pending, domain.GlobalSchemaStatusPending); err != nil {
+	activeFromPending, err := write(res.Pending, domain.GlobalSchemaStatusPending)
+	if err != nil {
 		return wc, err
 	}
-	wc.active = len(res.Promoted)
-	wc.pending = len(res.Pending)
+	wc.active = activeFromAuto + activeFromPending
+	wc.pending = len(res.Promoted) + len(res.Pending) - wc.active
 	return wc, nil
+}
+
+// preserveApproval carries an already-granted global approval forward onto the
+// refreshed record. Everything the promotion pass genuinely recomputed
+// (statement, scope, polarity, corroboration counts, confidence, surprise) is
+// left as the new value; only the review verdict and its provenance survive
+// from the prior row.
+//
+// It is one-directional on purpose. An active row stays active — a re-run under
+// `--gate operator` must not un-approve it. A pending row is free to become
+// active, because that is the gate legitimately deciding the schema now clears
+// automatically.
+func preserveApproval(next, prior domain.GlobalSchema) domain.GlobalSchema {
+	if prior.Status != domain.GlobalSchemaStatusActive {
+		return next
+	}
+	next.Status = domain.GlobalSchemaStatusActive
+	if !prior.PromotedAt.IsZero() {
+		next.PromotedAt = prior.PromotedAt
+	}
+	if prior.CreatedBy != "" {
+		next.CreatedBy = prior.CreatedBy
+	}
+	return next
 }
 
 // handlePromoteApprove activates a single pending global schema by id.

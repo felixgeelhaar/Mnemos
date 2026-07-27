@@ -65,7 +65,8 @@ func pruneStaleRelationships(dryRun bool, f Flags) {
 			if err := job.SetStatus("relating", ""); err != nil {
 				return err
 			}
-			keep, dropped, orphaned := partitionStaleContradictions(rels, byID, sessionOf)
+			keep, dropped, orphanEdges := partitionStaleContradictions(rels, byID, sessionOf)
+			orphaned := len(orphanEdges)
 
 			fmt.Printf("relationships:      %d total\n", len(rels))
 			fmt.Printf("stale contradicts:  %d (no longer produced by the current detectors)\n", len(dropped))
@@ -93,13 +94,27 @@ func pruneStaleRelationships(dryRun bool, f Flags) {
 			if err := job.SetStatus("saving", ""); err != nil {
 				return err
 			}
+			// Delete the edges this pass JUDGED, never "everything except my
+			// snapshot". The two are the same only if nothing wrote in between,
+			// and something usually does: re-deriving every contradiction edge
+			// against the detectors takes long enough that a `relate` run or a
+			// capture hook routinely lands edges mid-scan. Asking to retain
+			// `keep` would delete those as stale without ever evaluating them,
+			// because the pruner's snapshot predates them. Asking to drop the
+			// enumerated stale edges cannot: an edge absent from the snapshot is
+			// absent from the drop list, and the surviving set is re-read inside
+			// the governed write.
+			//
 			// Through the governed writer, not the repository directly: dropping
 			// tens of thousands of edges belongs in the evidence chain like any
 			// other mutation.
-			if _, err := w.PruneRelationships(ctx, keep, len(dropped)+orphaned); err != nil {
+			drop := make([]domain.Relationship, 0, len(dropped)+orphaned)
+			drop = append(drop, dropped...)
+			drop = append(drop, orphanEdges...)
+			if _, err := w.DropRelationships(ctx, drop); err != nil {
 				return NewSystemError(err, "prune relationships")
 			}
-			fmt.Printf("\npruned %d stale edge(s); %d retained.\n", len(dropped)+orphaned, len(keep))
+			fmt.Printf("\npruned %d stale edge(s); %d retained.\n", len(drop), len(keep))
 			return nil
 		})
 	if err != nil {
@@ -109,12 +124,16 @@ func pruneStaleRelationships(dryRun bool, f Flags) {
 
 // partitionStaleContradictions splits relationships into those to keep and the
 // contradiction edges the current detectors no longer produce. Edges whose
-// endpoints no longer exist are dropped and counted separately.
+// endpoints no longer exist are returned separately as orphaned.
+//
+// Both outgoing sets are explicit edge lists, not counts: the write path
+// deletes what this function names, so an edge it never saw can never be
+// deleted by it.
 //
 // Re-evaluation runs each pair back through relate.Engine.Detect — the same
 // entry point production uses — so this can never drift from the real
 // detection logic the way a reimplementation would.
-func partitionStaleContradictions(rels []domain.Relationship, byID map[string]domain.Claim, sessionOf map[string]string) (keep, dropped []domain.Relationship, orphaned int) {
+func partitionStaleContradictions(rels []domain.Relationship, byID map[string]domain.Claim, sessionOf map[string]string) (keep, dropped, orphaned []domain.Relationship) {
 	engine := relate.NewEngine()
 	keep = make([]domain.Relationship, 0, len(rels))
 
@@ -122,7 +141,7 @@ func partitionStaleContradictions(rels []domain.Relationship, byID map[string]do
 		from, okFrom := byID[r.FromClaimID]
 		to, okTo := byID[r.ToClaimID]
 		if !okFrom || !okTo {
-			orphaned++
+			orphaned = append(orphaned, r)
 			continue
 		}
 		if r.Type != domain.RelationshipTypeContradicts {
