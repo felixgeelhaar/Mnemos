@@ -8,6 +8,102 @@ notable changes.
 
 ## [Unreleased]
 
+## [0.118.0] — 2026-07-27
+
+A security and correctness release. Almost every item below is the same class of
+defect: a feature that was implemented, tested, documented — and unreachable, or
+a check that existed and was never consulted. None of them produced an error, an
+empty result, or a metric that moved, which is why they survived so long.
+
+### Security
+
+- **Nine mutating gRPC RPCs enforced no scope at all.** `requireScope` was called
+  from 4 of 13 write RPCs. A token holding only `claims:read` — or one with an
+  empty `scp` list, which the agent issuer emits verbatim while the user issuer
+  substitutes `*` — could record actions, outcomes, schemas, decisions and
+  reflexes, flip a belief's lifecycle, rewrite another owner's working memory,
+  and trigger synthesis. Guards now run before validation and before the facade
+  nil-check, so the error code cannot be used to probe whether a brain is
+  attached.
+- **`DELETE /v1/beliefs?run_id=` never consulted the run allowlist.** The only
+  precondition was holding `claims:write`; no relationship to the target run was
+  required, so any run-scoped token could delete any other run's events and
+  claims. Five read surfaces (`/v1/episodes`, `/v1/beliefs`, semantic search,
+  `/v1/context`, `/v1/search`) leaked across runs the same way. A restricted
+  token that omits `run_id` is now `403` rather than receiving the whole corpus.
+- **`watch_file` over `mcp --http` was an unconfined arbitrary-file read.**
+  Registering any path — `~/.mnemos/jwt-secret`, a `.env` — caused its contents
+  to be ingested as claims on the next write, retrievable through
+  `query_knowledge`. Watched paths are now confined to a root resolved once at
+  startup (the project root when a `.mnemos/` brain is found, else CWD), with
+  symlinks resolved *before* the containment test and re-checked every tick, so
+  a file swapped for an escaping symlink after registration is dropped rather
+  than ingested.
+- **Three MCP browse tools skipped the run allowlist.** `list_beliefs`,
+  `list_decisions` and `list_dissonances` went straight to `ListAll`. A
+  dissonance edge is now returned only when *both* endpoints are in scope, since
+  the pair hydrates each claim's text.
+- **`record_action` accepted an arbitrary `runId`** with no allowlist check.
+- **The hosted bearer token no longer reaches argv or stdout.** MCP registration
+  writes an `Authorization: Bearer ${MNEMOS_TOKEN}` placeholder instead of the
+  JWT, restoring the invariant that the token lives only in the `0600` config.
+- **`X-Forwarded-For` is trusted only under `serve --trust-proxy`**
+  (`MNEMOS_TRUST_PROXY`); the default is the socket peer.
+
+### Fixed
+
+- **Hop expansion bypassed every claim filter.** Deprecated, out-of-scope,
+  below-trust and out-of-valid-time claims were returned as answers whenever they
+  sat one hop from a match — including claims explicitly *forgotten*. Filtering
+  is post-traversal, so a retired claim can still bridge two live ones; it just
+  cannot be an answer. Rejected claims are also dropped from `hopDistance`, so
+  the reported distances describe what was actually returned.
+- **`memory://` dropped 15 of 33 claim fields**, silently.
+- **Postgres and SQLite disagreed about trust.** An `'epoch'` sentinel scored an
+  evidence-free claim at 0.24 on Postgres where SQLite scored it 0.80.
+- **MySQL never upgraded a pre-existing database.** It rejects
+  `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` as a syntax error and the provider
+  swallowed the 1064, so `lifecycle` and every later column only ever landed on
+  *fresh* databases. `applySchema` now retries without the clause.
+- **`test_requirement_ref` did not exist as a column on Postgres or MySQL**, so
+  `ListByTestRequirementRef` failed outright rather than being merely slow.
+- **Cascade delete could leave a stripped claim.** Repository calls commit
+  independently, so a failure part-way through left an active claim with no
+  evidence and no edges. The claim is now tombstoned first, and a survivor is
+  reported rather than silently left behind.
+- **Semantic dedupe stranded — and in fact failed on — merged claims.** A
+  surviving `claim_entities` row tripped the foreign key, aborting after the
+  loser's evidence had already moved. Evidence, relationships, entity links,
+  expectations, feedback and embeddings are now all repointed.
+- **`relate --prune-stale` was a lockless read-modify-write** that destroyed
+  edges written after its snapshot.
+- **Re-promotion reverted operator approval** on a global schema.
+- **Run-scoped answers ignored Hebbian strengthening, reconsolidation and
+  inhibition**; both entry points now converge on one write-back seam.
+- Batched three N+1 query paths (contradiction collection, inhibition, lesson
+  hydration across all backends) and fixed a `Scan` arity mismatch in
+  `ListClaimsForEntity` on Postgres and MySQL.
+- Fixed a data race on the MCP watcher and cognitive facade, where a `sync.Once`
+  established no happens-before for the shutdown goroutine — leaking the polling
+  goroutine and a long-lived database connection.
+- **`MNEMOS_EPISODIC_EVENTS` was unreachable**; the flag is now read in-package.
+
+### Changed
+
+- `test_decisiveness` no longer contributes to non-test claims; the remaining
+  five trust weights are renormalised to 1.0. Measured drift on real claims is
+  under 0.01.
+
+### Documentation
+
+- The entire documented REST surface was the pre-v0.85.0 one — `/v1/events`,
+  `/v1/claims`, `/v1/relationships` — across the README, OpenAPI spec, docs site
+  and the **runnable** examples, which failed against a real server. Endpoint
+  paths, wire keys, MCP tool names and gRPC method names now trace to the route
+  table, the live `srv.Tool` registrations and the proto. The OpenAPI spec no
+  longer advertises anonymous access to every operation, and the docs state the
+  post-v0.85.1 model: every data endpoint requires a JWT, reads included.
+
 ## [0.117.0] — 2026-07-26
 
 ### Added
