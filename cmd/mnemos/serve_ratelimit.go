@@ -68,9 +68,13 @@ func (l *leadsLimiterMap) allow(ip string) bool {
 //
 // The bucket is sized so a single legitimate visitor cannot trip it
 // (5 req/min, 10 burst), but a botnet of one IP cannot exceed it.
-// Operators behind a fronting CDN should ensure the IP allow-list
-// upstream + X-Forwarded-For propagation are configured so the
-// limiter sees the true client.
+//
+// The identity it buckets on is clientIP, which by default is the socket
+// peer. It deliberately does NOT trust X-Forwarded-For unless the operator
+// declared a fronting proxy with `serve --trust-proxy` / MNEMOS_TRUST_PROXY:
+// on a directly-exposed listener that header is attacker-controlled, so
+// believing it would hand every request its own bucket and reduce this
+// limiter — the only defence on the one auth-exempt route — to a no-op.
 func leadsRateLimitMiddleware(next http.Handler) http.Handler {
 	limiters := newLeadsLimiterMap()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
