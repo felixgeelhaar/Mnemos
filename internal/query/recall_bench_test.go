@@ -65,6 +65,7 @@ type countingEmbeddingRepo struct {
 	vectorsMaterialised int
 	searchCalls         int
 	searchHits          int
+	eventSearchCalls    int
 }
 
 func (r *countingEmbeddingRepo) Upsert(ctx context.Context, entityID, entityType string, vector []float32, model, createdBy string) error {
@@ -110,7 +111,30 @@ func (r *countingEmbeddingRepo) SearchClaimsByVector(
 	return hits, err
 }
 
+// SearchEventsByVector forwards to the wrapped repository's native vector
+// searcher. It must exist even when the inner repo has none: a decorator that
+// silently DROPS an optional capability makes the engine take a slower path
+// than production would, which is how the first version of this wrapper turned
+// a pgvector-backed store into a whole-corpus scan and made a passing
+// assertion look like a product bug.
+func (r *countingEmbeddingRepo) SearchEventsByVector(
+	ctx context.Context,
+	queryVector []float32,
+	model string,
+	topK int,
+	minSimilarity float64,
+) ([]ports.EventSimilarityHit, error) {
+	s, ok := r.inner.(ports.EventVectorSearcher)
+	if !ok {
+		return nil, ports.ErrVectorSearchUnavailable
+	}
+	hits, err := s.SearchEventsByVector(ctx, queryVector, model, topK, minSimilarity)
+	r.eventSearchCalls++
+	return hits, err
+}
+
 func (r *countingEmbeddingRepo) reset() {
+	r.eventSearchCalls = 0
 	r.listByTypeCalls = 0
 	r.vectorsMaterialised = 0
 	r.searchCalls = 0
