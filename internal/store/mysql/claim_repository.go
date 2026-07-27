@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.klarlabs.de/mnemos/internal/domain"
@@ -45,8 +46,9 @@ func (r ClaimRepository) upsertWithReason(ctx context.Context, claims []domain.C
 
 	now := time.Now().UTC()
 	upsert := `
-INSERT INTO claims (id, text, type, confidence, status, created_at, created_by, valid_from, trust_score, valid_to, subject_class, durability, confidence_components)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
+INSERT INTO claims (id, text, type, confidence, status, created_at, created_by, valid_from, trust_score, valid_to, subject_class, durability, confidence_components,
+                    test_id, test_requirement_ref, test_author, test_last_modified, test_last_run_at, test_pass_count, test_fail_count)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE
   text = VALUES(text),
   type = VALUES(type),
@@ -55,7 +57,14 @@ ON DUPLICATE KEY UPDATE
   valid_from = VALUES(valid_from),
   subject_class = VALUES(subject_class),
   durability = VALUES(durability),
-  confidence_components = VALUES(confidence_components)`
+  confidence_components = VALUES(confidence_components),
+  test_id = VALUES(test_id),
+  test_requirement_ref = VALUES(test_requirement_ref),
+  test_author = VALUES(test_author),
+  test_last_modified = VALUES(test_last_modified),
+  test_last_run_at = VALUES(test_last_run_at),
+  test_pass_count = VALUES(test_pass_count),
+  test_fail_count = VALUES(test_fail_count)`
 	historyInsert := `
 INSERT INTO claim_status_history (claim_id, from_status, to_status, changed_at, reason, changed_by)
 VALUES (?, ?, ?, ?, ?, ?)`
@@ -80,6 +89,9 @@ VALUES (?, ?, ?, ?, ?, ?)`
 			string(claim.Status), claim.CreatedAt.UTC(), actorOr(claim.CreatedBy),
 			validFrom.UTC(), string(claim.SubjectClass),
 			string(claim.Durability.Normalized()), encodeConfidenceComponents(claim.ConfidenceComponents),
+			claim.TestID, claim.TestRequirementRef, claim.TestAuthor,
+			nullTime(claim.TestLastModified), nullTime(claim.TestLastRunAt),
+			claim.TestPassCount, claim.TestFailCount,
 		); err != nil {
 			return fmt.Errorf("upsert claim %s: %w", claim.ID, err)
 		}
@@ -136,7 +148,7 @@ func (r ClaimRepository) ListByEventIDs(ctx context.Context, eventIDs []string) 
 	placeholders, args := inPlaceholders(eventIDs)
 	//nolint:gosec // G202: placeholders are literal "?" tokens, not user input
 	q := `
-SELECT DISTINCT c.id, c.text, c.type, c.confidence, c.status, c.created_at, c.created_by, c.trust_score, c.valid_from, c.valid_to, c.subject_class, c.durability, c.confidence_components
+SELECT DISTINCT ` + claimColumns("c") + `
 FROM claims c
 JOIN claim_evidence ce ON ce.claim_id = c.id
 WHERE ce.event_id IN (` + placeholders + `)
@@ -180,7 +192,7 @@ func (r ClaimRepository) ListByIDs(ctx context.Context, claimIDs []string) ([]do
 	placeholders, args := inPlaceholders(claimIDs)
 	//nolint:gosec // G202: placeholders are literal "?" tokens, not user input
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, text, type, confidence, status, created_at, created_by, trust_score, valid_from, valid_to, subject_class, durability, confidence_components
+SELECT `+claimColumns("")+`
 FROM claims WHERE id IN (`+placeholders+`)`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list claims by ids: %w", err)
@@ -238,7 +250,7 @@ func (r ClaimRepository) DeleteCascade(ctx context.Context, claimID string) erro
 // ListAll returns every claim ordered by created_at.
 func (r ClaimRepository) ListAll(ctx context.Context) ([]domain.Claim, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, text, type, confidence, status, created_at, created_by, trust_score, valid_from, valid_to, subject_class, durability, confidence_components
+SELECT `+claimColumns("")+`
 FROM claims ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list all claims: %w", err)
@@ -248,15 +260,18 @@ FROM claims ORDER BY created_at ASC`)
 }
 
 // ListByTestRequirementRef returns test_result claims sharing the given
-// non-empty TestRequirementRef. Note: scanClaimRow does not currently
-// hydrate test_provenance fields, so trust scoring of mysql-backed test
-// claims is incomplete (tracked separately). The filter is correct.
+// non-empty TestRequirementRef, freshest run first. Backed by
+// idx_claims_test_requirement_ref (test_requirement_ref, type). Both the index
+// and the test-provenance columns it covers were only declared alongside this
+// fix: before that the query named columns the schema never had and failed with
+// "unknown column", so test-vs-test contradiction resolution was not slow on
+// MySQL, it was broken.
 func (r ClaimRepository) ListByTestRequirementRef(ctx context.Context, ref string) ([]domain.Claim, error) {
 	if ref == "" {
 		return nil, nil
 	}
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, text, type, confidence, status, created_at, created_by, trust_score, valid_from, valid_to, subject_class, durability, confidence_components
+SELECT `+claimColumns("")+`
 FROM claims
 WHERE type = 'test_result' AND test_requirement_ref = ?
 ORDER BY test_last_run_at DESC, created_at DESC`, ref)
@@ -591,6 +606,41 @@ func (r ClaimRepository) CountClaimsBelowTrust(ctx context.Context, threshold fl
 	return n, nil
 }
 
+// nullTime maps the zero time to SQL NULL so an unset timestamp reads back as
+// "unknown" rather than as a real instant.
+func nullTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t.UTC()
+}
+
+// claimColumnNames is the ONE projection every claim read uses, in the exact
+// order scanClaimRow scans. Hand-written per-query projections drift out of
+// step with the scanner; the list lives here and every reader goes through
+// claimColumns.
+var claimColumnNames = []string{
+	"id", "text", "type", "confidence", "status", "created_at", "created_by",
+	"trust_score", "valid_from", "valid_to", "subject_class", "durability",
+	"confidence_components",
+	"test_id", "test_requirement_ref", "test_author", "test_last_modified",
+	"test_last_run_at", "test_pass_count", "test_fail_count",
+}
+
+// claimColumns renders the shared projection, optionally table-qualified
+// (alias "c" yields "c.id, c.text, ...") for the JOIN queries.
+func claimColumns(alias string) string {
+	cols := make([]string, len(claimColumnNames))
+	for i, c := range claimColumnNames {
+		if alias == "" {
+			cols[i] = c
+			continue
+		}
+		cols[i] = alias + "." + c
+	}
+	return strings.Join(cols, ", ")
+}
+
 func collectClaimRows(rows *sql.Rows) ([]domain.Claim, error) {
 	out := make([]domain.Claim, 0)
 	for rows.Next() {
@@ -608,9 +658,11 @@ func scanClaimRow(rows *sql.Rows) (domain.Claim, error) {
 	var typ, status, subjectClass, durability, confidenceComponents string
 	var validFrom sql.NullTime
 	var validTo sql.NullTime
+	var testLastModified, testLastRunAt sql.NullTime
 	if err := rows.Scan(
 		&c.ID, &c.Text, &typ, &c.Confidence, &status,
 		&c.CreatedAt, &c.CreatedBy, &c.TrustScore, &validFrom, &validTo, &subjectClass, &durability, &confidenceComponents,
+		&c.TestID, &c.TestRequirementRef, &c.TestAuthor, &testLastModified, &testLastRunAt, &c.TestPassCount, &c.TestFailCount,
 	); err != nil {
 		return domain.Claim{}, fmt.Errorf("scan claim row: %w", err)
 	}
@@ -624,6 +676,12 @@ func scanClaimRow(rows *sql.Rows) (domain.Claim, error) {
 	}
 	if validTo.Valid {
 		c.ValidTo = validTo.Time
+	}
+	if testLastModified.Valid {
+		c.TestLastModified = testLastModified.Time
+	}
+	if testLastRunAt.Valid {
+		c.TestLastRunAt = testLastRunAt.Time
 	}
 	if err := c.Validate(); err != nil {
 		return domain.Claim{}, fmt.Errorf("validate persisted claim %s: %w", c.ID, err)

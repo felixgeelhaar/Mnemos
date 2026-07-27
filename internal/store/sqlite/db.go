@@ -569,7 +569,11 @@ CREATE INDEX IF NOT EXISTS idx_global_schemas_promoted_at ON global_schemas(prom
 // outlives the session that produced it. Unknown (” from the DEFAULT) is treated
 // as durable everywhere, so every existing row keeps behaving exactly as before.
 // entry; the bump keeps user_version in step.
-const currentSchemaVersion = 23
+// v24 adds the index idx_claims_test_requirement_ref. No new column, but
+// the bump is REQUIRED: migrate() returns early when user_version is already at
+// currentSchemaVersion, so without it postMigrateIndexes never runs again and
+// every existing brain would keep full-scanning claims for a test lookup.
+const currentSchemaVersion = 24
 
 // addMissingColumn declares one defensive column-add. Each entry is
 // idempotent: if the column already exists in the table we skip it,
@@ -777,6 +781,16 @@ INSERT INTO claims_fts(claim_id, text) SELECT id, text FROM claims;
 CREATE INDEX IF NOT EXISTS idx_claims_trust_score ON claims(trust_score);
 CREATE INDEX IF NOT EXISTS idx_claims_valid_to ON claims(valid_to);
 CREATE INDEX IF NOT EXISTS idx_claims_lifecycle ON claims(lifecycle);
+-- v24: ListClaimsByTestRequirementRef filters
+-- "type = 'test_result' AND test_requirement_ref = ?". Unindexed, that was a
+-- full scan of every claim — on a brain that only grows, the cost of resolving
+-- one test-vs-test contradiction grew with the whole corpus.
+-- Deliberately NOT a partial index on test_requirement_ref != '': SQLite only
+-- uses a partial index when the query's WHERE provably implies the index
+-- predicate, and a bound parameter could itself be '', so the partial variant
+-- is never chosen for this query (verified with EXPLAIN QUERY PLAN).
+CREATE INDEX IF NOT EXISTS idx_claims_test_requirement_ref
+  ON claims(test_requirement_ref, type);
 `
 	if _, err := db.Exec(postMigrateIndexes); err != nil {
 		return fmt.Errorf("post-migrate indexes: %w", err)

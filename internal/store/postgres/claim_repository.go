@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.klarlabs.de/mnemos/internal/domain"
@@ -47,8 +48,9 @@ func (r ClaimRepository) upsertWithReason(ctx context.Context, claims []domain.C
 
 	now := time.Now().UTC()
 	upsert := fmt.Sprintf(`
-INSERT INTO %s (id, text, type, confidence, status, created_at, created_by, valid_from, trust_score, valid_to, lifecycle, subject_class, durability, confidence_components)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, NULL, $9, $10, $11, $12)
+INSERT INTO %s (id, text, type, confidence, status, created_at, created_by, valid_from, trust_score, valid_to, lifecycle, subject_class, durability, confidence_components,
+                test_id, test_requirement_ref, test_author, test_last_modified, test_last_run_at, test_pass_count, test_fail_count)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, NULL, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 ON CONFLICT (id) DO UPDATE SET
   text = EXCLUDED.text,
   type = EXCLUDED.type,
@@ -58,7 +60,14 @@ ON CONFLICT (id) DO UPDATE SET
   lifecycle = EXCLUDED.lifecycle,
   subject_class = EXCLUDED.subject_class,
   durability = EXCLUDED.durability,
-  confidence_components = EXCLUDED.confidence_components`, qualify(r.ns, "claims"))
+  confidence_components = EXCLUDED.confidence_components,
+  test_id = EXCLUDED.test_id,
+  test_requirement_ref = EXCLUDED.test_requirement_ref,
+  test_author = EXCLUDED.test_author,
+  test_last_modified = EXCLUDED.test_last_modified,
+  test_last_run_at = EXCLUDED.test_last_run_at,
+  test_pass_count = EXCLUDED.test_pass_count,
+  test_fail_count = EXCLUDED.test_fail_count`, qualify(r.ns, "claims"))
 	historyInsert := fmt.Sprintf(`
 INSERT INTO %s (claim_id, from_status, to_status, changed_at, reason, changed_by)
 VALUES ($1, $2, $3, $4, $5, $6)`, qualify(r.ns, "claim_status_history"))
@@ -83,6 +92,9 @@ VALUES ($1, $2, $3, $4, $5, $6)`, qualify(r.ns, "claim_status_history"))
 			string(claim.Status), claim.CreatedAt.UTC(), actorOr(claim.CreatedBy),
 			validFrom.UTC(), string(claim.Lifecycle), string(claim.SubjectClass),
 			string(claim.Durability.Normalized()), encodeConfidenceComponents(claim.ConfidenceComponents),
+			claim.TestID, claim.TestRequirementRef, claim.TestAuthor,
+			nullTime(claim.TestLastModified), nullTime(claim.TestLastRunAt),
+			claim.TestPassCount, claim.TestFailCount,
 		); err != nil {
 			return fmt.Errorf("upsert claim %s: %w", claim.ID, err)
 		}
@@ -138,7 +150,7 @@ func (r ClaimRepository) ListByEventIDs(ctx context.Context, eventIDs []string) 
 		return []domain.Claim{}, nil
 	}
 	q := fmt.Sprintf(`
-SELECT DISTINCT c.id, c.text, c.type, c.confidence, c.status, c.created_at, c.created_by, c.trust_score, c.valid_from, c.valid_to, c.lifecycle, c.subject_class, c.durability, c.confidence_components
+SELECT DISTINCT `+claimColumns("c")+`
 FROM %s c
 JOIN %s ce ON ce.claim_id = c.id
 WHERE ce.event_id = ANY($1)
@@ -179,7 +191,7 @@ func (r ClaimRepository) ListByIDs(ctx context.Context, claimIDs []string) ([]do
 		return []domain.Claim{}, nil
 	}
 	rows, err := r.db.QueryContext(ctx, fmt.Sprintf(`
-SELECT id, text, type, confidence, status, created_at, created_by, trust_score, valid_from, valid_to, lifecycle, subject_class, durability, confidence_components
+SELECT `+claimColumns("")+`
 FROM %s WHERE id = ANY($1)`, qualify(r.ns, "claims")), pgArray(claimIDs))
 	if err != nil {
 		return nil, fmt.Errorf("list claims by ids: %w", err)
@@ -240,7 +252,7 @@ func (r ClaimRepository) DeleteCascade(ctx context.Context, claimID string) erro
 // ListAll satisfies the corresponding ports method.
 func (r ClaimRepository) ListAll(ctx context.Context) ([]domain.Claim, error) {
 	rows, err := r.db.QueryContext(ctx, fmt.Sprintf(`
-SELECT id, text, type, confidence, status, created_at, created_by, trust_score, valid_from, valid_to, lifecycle, subject_class, durability, confidence_components
+SELECT `+claimColumns("")+`
 FROM %s ORDER BY created_at ASC`, qualify(r.ns, "claims")))
 	if err != nil {
 		return nil, fmt.Errorf("list all claims: %w", err)
@@ -249,16 +261,18 @@ FROM %s ORDER BY created_at ASC`, qualify(r.ns, "claims")))
 	return collectClaimRows(rows)
 }
 
-// ListByTestRequirementRef satisfies the corresponding ports method.
-// Note: scanClaimRow currently does not hydrate the test_provenance fields,
-// so trust scoring on postgres-backed test_result claims is incomplete
-// (tracked separately). The filter itself is backend-correct.
+// ListByTestRequirementRef returns every test_result claim sharing the given
+// non-empty ref, freshest run first. Backed by idx_claims_test_requirement_ref
+// (test_requirement_ref, type). Both the index and the test-provenance columns
+// it covers were only declared alongside this fix: before that the query named
+// columns the schema never had and failed with 42703, so test-vs-test
+// contradiction resolution was not slow on Postgres, it was broken.
 func (r ClaimRepository) ListByTestRequirementRef(ctx context.Context, ref string) ([]domain.Claim, error) {
 	if ref == "" {
 		return nil, nil
 	}
 	rows, err := r.db.QueryContext(ctx, fmt.Sprintf(`
-SELECT id, text, type, confidence, status, created_at, created_by, trust_score, valid_from, valid_to, lifecycle, subject_class, durability, confidence_components
+SELECT `+claimColumns("")+`
 FROM %s
 WHERE type = 'test_result' AND test_requirement_ref = $1
 ORDER BY test_last_run_at DESC, created_at DESC`, qualify(r.ns, "claims")), ref)
@@ -488,11 +502,20 @@ type trustInput struct {
 // AUTHORS and total events separately, so corroboration can be graded by
 // independence (echo-chamber guard). LEFT JOIN so claims with no evidence still
 // appear.
+//
+// MAX(e.timestamp) is deliberately NOT coalesced to a date sentinel. A claim
+// with no evidence must reach trust.Score with the ZERO time — the value
+// freshnessFactor short-circuits to 1.0 — exactly as it does on sqlite and
+// mysql. Coalescing to 'epoch' handed the scorer 1970-01-01, which is not
+// "unknown" but "55 years stale": exp(-20000/90) clamps to the freshness floor
+// and the same claim scored confidence×0.3 here and confidence×1.0 there,
+// dropping it below --min-trust gates and `forget --below-trust` floors on
+// Postgres only. NULL is scanned into a sql.NullTime and left zero.
 func (r ClaimRepository) trustInputsSQL(where string) string {
 	return fmt.Sprintf(`
 SELECT c.id, c.confidence,
        COUNT(DISTINCT e.created_by), COUNT(DISTINCT ce.event_id),
-       COALESCE(MAX(e.timestamp), 'epoch'::timestamptz)
+       MAX(e.timestamp)
 FROM %s c
 LEFT JOIN %s ce ON ce.claim_id = c.id
 LEFT JOIN %s e ON e.id = ce.event_id
@@ -517,8 +540,14 @@ func (r ClaimRepository) listTrustInputs(ctx context.Context, query string, args
 	var inputs []trustInput
 	for rows.Next() {
 		var in trustInput
-		if err := rows.Scan(&in.id, &in.confidence, &in.distinctSources, &in.totalEvents, &in.latest); err != nil {
+		// NULL (no evidence rows) leaves in.latest at the zero time, the
+		// cross-backend "unknown freshness" sentinel. See trustInputsSQL.
+		var latest sql.NullTime
+		if err := rows.Scan(&in.id, &in.confidence, &in.distinctSources, &in.totalEvents, &latest); err != nil {
 			return nil, fmt.Errorf("scan trust input: %w", err)
+		}
+		if latest.Valid {
+			in.latest = latest.Time
 		}
 		inputs = append(inputs, in)
 	}
@@ -602,6 +631,43 @@ func (r ClaimRepository) CountClaimsBelowTrust(ctx context.Context, threshold fl
 	return n, nil
 }
 
+// nullTime maps the zero time to SQL NULL so an unset timestamp reads back as
+// "unknown" rather than as year 1 / the epoch — the same sentinel discipline
+// the trust scorer depends on.
+func nullTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t.UTC()
+}
+
+// claimColumnNames is the ONE projection every claim read uses, in the exact
+// order scanClaimRow scans. Hand-written per-query projections drifted out of
+// step with the scanner (ListClaimsForEntity omitted `durability` and failed at
+// Scan with an arity mismatch), so the list lives in one place and every reader
+// goes through claimColumns.
+var claimColumnNames = []string{
+	"id", "text", "type", "confidence", "status", "created_at", "created_by",
+	"trust_score", "valid_from", "valid_to", "lifecycle", "subject_class",
+	"durability", "confidence_components",
+	"test_id", "test_requirement_ref", "test_author", "test_last_modified",
+	"test_last_run_at", "test_pass_count", "test_fail_count",
+}
+
+// claimColumns renders the shared projection, optionally table-qualified
+// (alias "c" yields "c.id, c.text, ...") for the JOIN queries.
+func claimColumns(alias string) string {
+	cols := make([]string, len(claimColumnNames))
+	for i, c := range claimColumnNames {
+		if alias == "" {
+			cols[i] = c
+			continue
+		}
+		cols[i] = alias + "." + c
+	}
+	return strings.Join(cols, ", ")
+}
+
 func collectClaimRows(rows *sql.Rows) ([]domain.Claim, error) {
 	out := make([]domain.Claim, 0)
 	for rows.Next() {
@@ -619,9 +685,11 @@ func scanClaimRow(rows *sql.Rows) (domain.Claim, error) {
 	var typ, status, lifecycle, subjectClass, durability, confidenceComponents string
 	var validFrom sql.NullTime
 	var validTo sql.NullTime
+	var testLastModified, testLastRunAt sql.NullTime
 	if err := rows.Scan(
 		&c.ID, &c.Text, &typ, &c.Confidence, &status,
 		&c.CreatedAt, &c.CreatedBy, &c.TrustScore, &validFrom, &validTo, &lifecycle, &subjectClass, &durability, &confidenceComponents,
+		&c.TestID, &c.TestRequirementRef, &c.TestAuthor, &testLastModified, &testLastRunAt, &c.TestPassCount, &c.TestFailCount,
 	); err != nil {
 		return domain.Claim{}, fmt.Errorf("scan claim row: %w", err)
 	}
@@ -636,6 +704,12 @@ func scanClaimRow(rows *sql.Rows) (domain.Claim, error) {
 	}
 	if validTo.Valid {
 		c.ValidTo = validTo.Time
+	}
+	if testLastModified.Valid {
+		c.TestLastModified = testLastModified.Time
+	}
+	if testLastRunAt.Valid {
+		c.TestLastRunAt = testLastRunAt.Time
 	}
 	if err := c.Validate(); err != nil {
 		return domain.Claim{}, fmt.Errorf("validate persisted claim %s: %w", c.ID, err)

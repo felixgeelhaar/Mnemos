@@ -749,8 +749,10 @@ func (r ClaimRepository) ListAll(ctx context.Context) ([]domain.Claim, error) {
 // ListByTestRequirementRef returns every test_result claim sharing the
 // given non-empty TestRequirementRef, ordered TestLastRunAt DESC then
 // CreatedAt DESC so the freshest run sorts first when the trust scorer
-// breaks a tie. Empty ref short-circuits with no rows — partial index
-// already excludes them.
+// breaks a tie. Empty ref short-circuits with no rows, which is also what
+// the partial index idx_claims_test_requirement_ref
+// (test_requirement_ref, type) WHERE test_requirement_ref != ” covers —
+// added in schema v24. Before that this was a full scan of claims.
 func (r ClaimRepository) ListByTestRequirementRef(ctx context.Context, ref string) ([]domain.Claim, error) {
 	if ref == "" {
 		return nil, nil

@@ -55,14 +55,23 @@ CREATE TABLE IF NOT EXISTS claims (
   subject_class  VARCHAR(32)      NOT NULL DEFAULT '',
   durability     VARCHAR(32)      NOT NULL DEFAULT '',
   confidence_components JSON      NULL,
+  test_id              VARCHAR(190) NOT NULL DEFAULT '',
+  test_requirement_ref VARCHAR(190) NOT NULL DEFAULT '',
+  test_author          VARCHAR(190) NOT NULL DEFAULT '',
+  test_last_modified   DATETIME(6)  NULL,
+  test_last_run_at     DATETIME(6)  NULL,
+  test_pass_count      INT          NOT NULL DEFAULT 0,
+  test_fail_count      INT          NOT NULL DEFAULT 0,
   PRIMARY KEY (id),
   KEY idx_claims_trust_score   (trust_score),
   KEY idx_claims_valid_to      (valid_to),
   KEY idx_claims_scope_service (scope_service)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Idempotent column adds for pre-existing databases upgraded from
--- earlier schema generations. MySQL 8.0.29+ supports IF NOT EXISTS.
+-- Idempotent column adds for pre-existing databases upgraded from earlier
+-- schema generations. MariaDB understands IF NOT EXISTS here; vanilla MySQL
+-- does NOT (it is a syntax error), so the provider retries these without the
+-- clause and treats "duplicate column" as success — see applySchema.
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_verified  DATETIME(6)  NULL;
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS verify_count   INT          NOT NULL DEFAULT 0;
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS half_life_days DOUBLE       NOT NULL DEFAULT 0;
@@ -79,6 +88,24 @@ ALTER TABLE claims ADD COLUMN IF NOT EXISTS subject_class VARCHAR(32) NOT NULL D
 -- treated as durable: the whole back catalogue predates the column, so absence
 -- of a verdict must never demote a belief.
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS durability VARCHAR(32) NOT NULL DEFAULT '';
+-- Test provenance (Claim.Type == 'test_result'). ListByTestRequirementRef has
+-- always queried test_requirement_ref / test_last_run_at here, but the columns
+-- were never declared, so the call failed outright (unknown column) rather than
+-- returning no rows. Declared in the CREATE TABLE above for fresh databases and
+-- here for pre-existing ones.
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_id              VARCHAR(190) NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_requirement_ref VARCHAR(190) NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_author          VARCHAR(190) NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_last_modified   DATETIME(6)  NULL;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_last_run_at     DATETIME(6)  NULL;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_pass_count      INT          NOT NULL DEFAULT 0;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_fail_count      INT          NOT NULL DEFAULT 0;
+-- ListByTestRequirementRef filters `type = 'test_result' AND
+-- test_requirement_ref = ?`. MySQL has no partial indexes, so this is a plain
+-- composite; without it the lookup scans every claim row. CREATE INDEX has no
+-- IF NOT EXISTS in MySQL — a re-run's "duplicate key name" (1061) is swallowed
+-- by isBenignSchemaError, which is how this file stays idempotent.
+CREATE INDEX idx_claims_test_requirement_ref ON claims (test_requirement_ref, type);
 
 CREATE TABLE IF NOT EXISTS entities (
   id              VARCHAR(190) NOT NULL,

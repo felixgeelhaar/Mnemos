@@ -113,7 +113,7 @@ FROM %s WHERE normalized_name = $1 LIMIT 1`, qualify(r.ns, "entities")), norm)
 // ListClaimsForEntity satisfies the corresponding ports method.
 func (r EntityRepository) ListClaimsForEntity(ctx context.Context, entityID string) ([]domain.Claim, error) {
 	rows, err := r.db.QueryContext(ctx, fmt.Sprintf(`
-SELECT c.id, c.text, c.type, c.confidence, c.status, c.created_at, c.created_by, c.trust_score, c.valid_from, c.valid_to, c.lifecycle, c.subject_class, c.confidence_components
+SELECT `+claimColumns("c")+`
 FROM %s c
 JOIN %s ce ON ce.claim_id = c.id
 WHERE ce.entity_id = $1

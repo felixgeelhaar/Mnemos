@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.klarlabs.de/mnemos/internal/domain"
@@ -185,14 +186,61 @@ func (r LessonRepository) collectLessonRows(ctx context.Context, rows *sql.Rows)
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	for i := range out {
-		ev, err := r.ListEvidence(ctx, out[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		out[i].Evidence = ev
+	return out, r.hydrateEvidence(ctx, out)
+}
+
+// evidenceHydrationChunk bounds the IN list so one enormous lesson set does not
+// exceed max_allowed_packet with a single giant statement.
+const evidenceHydrationChunk = 500
+
+// hydrateEvidence fills in Evidence for every lesson using ONE query per chunk
+// instead of one per lesson. ListAll/ListByService/ListByTrigger previously
+// issued a round trip per returned row, so listing cost grew linearly with a
+// lesson corpus that only ever grows (synthesis adds, nothing removes).
+func (r LessonRepository) hydrateEvidence(ctx context.Context, lessons []domain.Lesson) error {
+	if len(lessons) == 0 {
+		return nil
 	}
-	return out, nil
+	byLesson := make(map[string][]string, len(lessons))
+	for start := 0; start < len(lessons); start += evidenceHydrationChunk {
+		end := min(start+evidenceHydrationChunk, len(lessons))
+		chunk := lessons[start:end]
+		args := make([]any, len(chunk))
+		for i, l := range chunk {
+			args[i] = l.ID
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+		//nolint:gosec // G202: placeholders are literal "?" tokens, not user input
+		rows, err := r.db.QueryContext(ctx,
+			`SELECT lesson_id, action_id FROM lesson_evidence WHERE lesson_id IN (`+
+				placeholders+`) ORDER BY lesson_id, action_id`, args...)
+		if err != nil {
+			return fmt.Errorf("list lesson evidence: %w", err)
+		}
+		err = func() error {
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var lessonID, actionID string
+				if err := rows.Scan(&lessonID, &actionID); err != nil {
+					return fmt.Errorf("scan lesson evidence: %w", err)
+				}
+				byLesson[lessonID] = append(byLesson[lessonID], actionID)
+			}
+			return rows.Err()
+		}()
+		if err != nil {
+			return err
+		}
+	}
+	for i := range lessons {
+		ev, ok := byLesson[lessons[i].ID]
+		if !ok {
+			// Match the per-lesson path, which returned an empty non-nil slice.
+			ev = []string{}
+		}
+		lessons[i].Evidence = ev
+	}
+	return nil
 }
 
 // ListVersions returns every snapshot row for the given lesson.
