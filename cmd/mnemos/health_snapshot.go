@@ -2,9 +2,7 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -81,21 +79,9 @@ func maybeSnapshotHealth(now time.Time) bool {
 	if hostedConfigured() || !healthSnapshotDue(now) {
 		return false
 	}
-	self, err := os.Executable()
-	if err != nil {
+	if !spawnWorker([]string{"health", "--journal"}) {
 		return false
 	}
-	args := []string{"health", "--journal"}
-	if dsn := strings.TrimSpace(os.Getenv("MNEMOS_DB_URL")); dsn != "" {
-		args = append(args, "--db", dsn)
-	}
-	cmd := exec.Command(self, args...) //nolint:gosec // self-exec with fixed args
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
-	cmd.SysProcAttr = detachSysProcAttr()
-	if err := cmd.Start(); err != nil {
-		return false
-	}
-	_ = cmd.Process.Release()
 	markHealthSnapshot(now)
 	return true
 }

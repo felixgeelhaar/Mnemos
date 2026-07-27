@@ -50,8 +50,14 @@ func TestMaybeSnapshotHealth_StampsOnSpawnNotSuccess(t *testing.T) {
 	t.Setenv("MNEMOS_DB_URL", "memory://")
 	now := time.Now()
 
+	// Stubbed rather than spawned for real: re-execing the test binary runs the
+	// whole suite, which reaches this test and spawns again (see selfexec.go).
+	// The old `t.Skip` on failure also meant this passed either way.
+	restore := stubSpawnWorker(t, func([]string) bool { return true })
+	defer restore()
+
 	if !maybeSnapshotHealth(now) {
-		t.Skip("could not spawn in this environment")
+		t.Fatal("a due snapshot must run")
 	}
 	if _, err := os.Stat(healthSnapshotStamp()); err != nil {
 		t.Fatalf("spawning must stamp immediately: %v", err)
