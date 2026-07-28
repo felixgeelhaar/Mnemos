@@ -8,6 +8,37 @@ notable changes.
 
 ## [Unreleased]
 
+## [0.122.0] — 2026-07-29
+
+### Added
+
+- **MCP tools for expectation, observation and feedback** (#323). `mnemos serve`
+  exposed POST on `/v1/beliefs/<id>/expectation`, `/observation` and `/feedback`;
+  the MCP server — the surface an agent actually speaks — had 45 tools and none
+  of them.
+
+  That asymmetry is why `claim_expectations` and `claim_feedback` sat empty on a
+  brain with 86,505 claims, and why `consolidate --credit` reported
+  `credited: 0`. ADR 0014 calls credit assignment "the capstone learning loop":
+  it propagates the signed prediction error of each RESOLVED expectation back to
+  the beliefs that informed a decision. With no way to record an expectation,
+  nothing ever resolved and the capstone had no input.
+
+  Feedback is the sharper case — the consumer of recall is the only party that
+  can judge whether a recalled belief was useful, and until now the only
+  consumer that could say so was an HTTP client rather than the MCP client doing
+  the recalling.
+
+  The tools mirror the REST handlers rather than inventing a nicer shape: same
+  fields, same validation, same semantics, including the refusal when an
+  observation has no expectation to resolve and the helpful-vote-resets-streak
+  asymmetry.
+
+  Still without MCP counterparts, and recorded as such in the parity matrix:
+  `/v1/incidents`, `/v1/associations`, `/v1/federation/export`, `{id}/history`
+  and `{id}/provenance`. Those are read and ops surfaces rather than
+  learning-loop inputs.
+
 ## [0.121.0] — 2026-07-28
 
 ### Added
