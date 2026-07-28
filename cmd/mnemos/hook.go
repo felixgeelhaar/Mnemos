@@ -699,7 +699,20 @@ func captureTextCtx(ctx context.Context, ev hookEvent, text string) bool {
 
 	// Local brain: auto-enable LLM/embeddings when a provider is configured on
 	// this machine; the pipeline degrades to rule-based extraction otherwise.
-	useLLM := strings.TrimSpace(os.Getenv("MNEMOS_LLM_PROVIDER")) != ""
+	//
+	// Ask the resolver rather than reading MNEMOS_LLM_PROVIDER directly.
+	// ConfigFromEnv also auto-detects a locally running Ollama — the documented
+	// zero-config path — so testing the variable alone reports "no LLM" on
+	// exactly the setup the project tells people to use, and does so silently.
+	//
+	// The consequence was not a missing nicety. Every captured session fell back
+	// to rule-based extraction, which on conversational text yields fragments of
+	// narration as "beliefs" ("Now the doctor output:", "Let me clean those up
+	// first"), and UseEmbeddings rode the same flag so those claims got no
+	// vectors either. Entity extraction never ran at all: 0 rows, against 86,190
+	// claims. `mnemos doctor` reported provider=ollama throughout, because doctor
+	// asks the resolver and this did not.
+	useLLM := llmConfigured()
 	ok := false
 	write := func() {
 		_, err := mcpRunProcessText(ctx, "claude-code", mcpProcessTextInput{
