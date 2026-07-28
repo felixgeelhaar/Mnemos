@@ -8,6 +8,35 @@ notable changes.
 
 ## [Unreleased]
 
+## [0.121.0] — 2026-07-28
+
+### Added
+
+- **`prune --session-local`** (#320) retires beliefs an LLM already judged
+  session-local — statements tied to the moment they were written rather than
+  knowledge that outlives it. It is the sibling of `prune --narration`: that one
+  re-runs the rule-based junk filter, this one acts on a verdict the durability
+  classifier already recorded, so it needs no model and is purely a write.
+
+  `prune --session-noise` was not enough on its own. It drops contradiction
+  EDGES between two session-local claims, and on a real brain only 209 of 25,074
+  live contradictions had session-local on both sides while **10,354 had it on at
+  least one**. The asymmetric majority is not a pair of narration claims arguing
+  — it is one fragment that should never have been a belief. Retiring the claim
+  reaches all of them.
+
+  Deprecation, never deletion: the claim keeps its evidence and history, stays
+  queryable with `--include-history`, and each transition lands a
+  `claim_status_history` row through the governed writer. Only an EXPLICIT
+  session-local verdict qualifies — unclassified is not narration — and
+  already-retired claims are skipped, so a re-run is idempotent.
+
+  Used to bring a real brain from `dissonance 0.3802` (unhealthy) to **0.0243
+  (healthy)**, alongside `prune --narration`: 17,705 claims deprecated, none
+  deleted. Justified by measurement rather than assumption — only 485 of the
+  25,074 contradictions were `durable ⇎ durable` genuine conflicts, so noise
+  outnumbered signal ~50:1.
+
 ## [0.120.0] — 2026-07-28
 
 **LLM extraction had never actually run.** Every captured session silently fell
