@@ -3,6 +3,7 @@ package mnemos
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"maps"
 	"strings"
 	"time"
@@ -66,7 +67,7 @@ func (e rememberExecutor) Execute(ctx context.Context, input any, _ axidomain.Ca
 		events[i].CreatedBy = m.actorID
 	}
 
-	claims, links, _, err := m.extractor.ExtractFn(ctx, events)
+	claims, links, entities, err := m.extractor.ExtractFn(ctx, events)
 	if err != nil {
 		return axidomain.ExecutionResult{}, nil, fmt.Errorf("extract: %w", err)
 	}
@@ -94,6 +95,22 @@ func (e rememberExecutor) Execute(ctx context.Context, input any, _ axidomain.Ca
 
 	if err := pipeline.PersistArtifacts(ctx, m.conn, events, claims, links, rels); err != nil {
 		return axidomain.ExecutionResult{}, nil, fmt.Errorf("persist: %w", err)
+	}
+
+	// Materialise the entity tags the extractor produced.
+	//
+	// This is the governed write path — what MCP process_text, and therefore
+	// every Claude Code capture hook, goes through. It discarded the entities
+	// into `_` while the CLI's extract/process commands materialised them, so
+	// entity extraction ran on every captured session and persisted nothing:
+	// 0 entity rows against 86,190 claims on a real brain.
+	//
+	// Non-fatal, matching the CLI: claims are the knowledge, entities are an
+	// enrichment, and a failure here must not lose a capture that already
+	// succeeded.
+	if n, entErr := pipeline.MaterializeEntities(ctx, m.conn, entities, m.actorID); entErr != nil {
+		slog.WarnContext(ctx, "entity materialisation failed",
+			"linked_before_failure", n, "error", entErr)
 	}
 
 	out := rememberOutput{Events: len(events), Claims: len(claims), Relationships: len(rels)}
