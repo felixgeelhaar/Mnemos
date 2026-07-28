@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -82,7 +83,25 @@ func NewExtractor(useLLM bool) (*Extractor, error) {
 		return nil, fmt.Errorf("failed to create LLM client: %w", err)
 	}
 
-	return NewLLMExtractor(client), nil
+	return NewLLMExtractor(client, ExtractionCacheDir()), nil
+}
+
+// ExtractionCacheDir resolves the extraction cache to the same per-user data
+// directory as the brain, honouring XDG_DATA_HOME. It exists here so both this
+// package and the public library root resolve it identically instead of each
+// re-deriving a path.
+func ExtractionCacheDir() string {
+	dataHome := os.Getenv("XDG_DATA_HOME")
+	if dataHome == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			// No home to anchor to: fall back to the historical relative path
+			// rather than disabling the cache outright.
+			return filepath.Join("data", "cache", "llm-extraction")
+		}
+		dataHome = filepath.Join(home, ".local", "share")
+	}
+	return filepath.Join(dataHome, "mnemos", "cache", "llm-extraction")
 }
 
 // NewLLMExtractor builds an Extractor backed by the supplied LLM client
@@ -97,9 +116,14 @@ func NewExtractor(useLLM bool) (*Extractor, error) {
 // outside pipeline cannot set it, so they must build their LLM
 // extractor through this constructor to get evidence-grade token
 // accounting.
-func NewLLMExtractor(client llm.Client) *Extractor {
+//
+// cacheDir is a parameter rather than the engine's default because that default
+// is RELATIVE, so it resolves against the process's working directory — the
+// user's repository, for a tool invoked from one. Callers pass an absolute
+// per-user path; "" disables caching.
+func NewLLMExtractor(client llm.Client, cacheDir string) *Extractor {
 	ext := &Extractor{}
-	engine := extract.NewLLMEngine(client).WithUsageSink(func(u extract.TokenUsage) {
+	engine := extract.NewLLMEngine(client).WithCacheDir(cacheDir).WithUsageSink(func(u extract.TokenUsage) {
 		// Copy the value so the pointer the engine stack-allocated
 		// doesn't escape into our field unintentionally.
 		usage := u
