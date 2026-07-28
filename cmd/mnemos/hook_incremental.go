@@ -128,7 +128,35 @@ func extractTranscriptTextFrom(path string, offset int64, maxBytes int) (string,
 	// routinely stops long before the window ends. Advancing by the window
 	// would mark the unread remainder as captured and skip it permanently.
 	text, consumed := transcriptTextFromLines(string(data), maxBytes)
+	lastSpan.set(string(data[:min(consumed, len(data))]))
 	return text, offset + int64(consumed)
+}
+
+// lastSpan carries the raw JSONL that the most recent extract actually
+// CONSUMED, so the caller can derive tool actions from exactly the same bytes
+// it is about to advance the offset past.
+//
+// The consumed prefix, not the whole window, is the load-bearing detail. The
+// window is 4 MiB while the extractor stops at 8–20 KiB, so deriving actions
+// from everything read would re-derive the unconsumed tail on every subsequent
+// pass and record the same operation over and over — inflating exactly the
+// success rates that playbook reinforcement is computed from.
+//
+// A package-level handoff rather than a changed signature: extractTranscriptTextFrom
+// has several call sites (including tests) that want the text and nothing else,
+// and widening the return for one consumer would churn all of them.
+var lastSpan spanBuffer
+
+type spanBuffer struct{ raw string }
+
+func (s *spanBuffer) set(raw string) { s.raw = raw }
+
+// take returns the buffered span and clears it, so a caller can never derive
+// actions twice from one read.
+func (s *spanBuffer) take() string {
+	raw := s.raw
+	s.raw = ""
+	return raw
 }
 
 // spawnDetachedCapture re-execs this binary as a background worker for the
@@ -222,12 +250,18 @@ func captureRange(ev hookEvent, maxBytes int) {
 func captureRangeCtx(ctx context.Context, ev hookEvent, maxBytes int) bool {
 	offset := loadCaptureOffset(ev.SessionID)
 	text, newOffset := extractTranscriptTextFrom(ev.TranscriptPath, offset, maxBytes)
+	span := lastSpan.take()
 	if strings.TrimSpace(text) == "" {
 		return false
 	}
 	if !captureTextCtx(ctx, ev, text) {
 		return false // leave the offset alone so the next run retries this span
 	}
+	// Feed the action/outcome layer from the same span. Best-effort and after
+	// the capture succeeded: the claims are the knowledge, and a brain that
+	// records the conversation but misses an action is strictly better than one
+	// that loses the conversation trying to record the action.
+	recordToolActions(ctx, ev, span)
 	// No session id means no offset can be persisted (storeCaptureOffset is a
 	// no-op for one), so a further pass would re-read this exact span. Capture
 	// it once and report no progress.
