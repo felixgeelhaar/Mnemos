@@ -515,6 +515,27 @@ func handleMCP(args []string) {
 			return mcpRunRecordAction(ctx, mcpActorFor(ctx, mcpActor), input)
 		})
 
+	srv.Tool("record_expectation").
+		Description("Attach a forward numeric prediction to a belief (predicted value + tolerance + horizon). Resolving it later with record_observation is what feeds credit assignment (ADR 0014). Mirrors POST /v1/beliefs/<id>/expectation.").
+		OutputSchema(mcpRecordExpectationOutput{}).
+		Handler(func(ctx context.Context, input mcpRecordExpectationInput) (mcpRecordExpectationOutput, error) {
+			return mcpRunRecordExpectation(ctx, input)
+		})
+
+	srv.Tool("record_observation").
+		Description("Record what was actually observed for a belief that carries an expectation, resolving it into a signed prediction error. Returns whether the prediction validated. Mirrors POST /v1/beliefs/<id>/observation.").
+		OutputSchema(mcpRecordObservationOutput{}).
+		Handler(func(ctx context.Context, input mcpRecordObservationInput) (mcpRecordObservationOutput, error) {
+			return mcpRunRecordObservation(ctx, input)
+		})
+
+	srv.Tool("record_feedback").
+		Description("Record whether a recalled belief was actually useful. A helpful vote resets the negative streak; an unhelpful one extends it. Mirrors POST /v1/beliefs/<id>/feedback.").
+		OutputSchema(mcpRecordFeedbackOutput{}).
+		Handler(func(ctx context.Context, input mcpRecordFeedbackInput) (mcpRecordFeedbackOutput, error) {
+			return mcpRunRecordFeedback(ctx, input)
+		})
+
 	srv.Tool("record_outcome").
 		Description("Record the observed outcome of a previously recorded Action, including numeric metrics. Idempotent on id.").
 		OutputSchema(mcpRecordOutcomeOutput{}).
