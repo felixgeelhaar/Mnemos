@@ -24,8 +24,23 @@ import (
 
 // ListActions returns recorded operational actions with optional
 // subject/run filters and cursor pagination.
+//
+// F.4.b on the read side, matching ListBeliefs. run_id here was an OPTIONAL
+// filter the caller chose, never a boundary the token imposed: a run-scoped
+// bearer that named someone else's run — or simply asked by subject, or asked
+// for nothing at all — read every run's actions. domain.Action carries its
+// RunID, so the whitelist can decide which actions are legible directly.
 func (s *Server) ListActions(ctx context.Context, req *mnemosv1.ListActionsRequest) (*mnemosv1.ListActionsResponse, error) {
 	limit, offset := normalizePagination(req.Pagination)
+
+	// Naming a run outside the whitelist is refused rather than silently
+	// answered with an empty page — a caller that cannot tell "no actions"
+	// from "not yours" will read the first as fact. Checked before the read.
+	allowed := allowedRunsFromContext(ctx)
+	if req.RunId != "" && !runAllowed(allowed, req.RunId) {
+		return nil, status.Errorf(codes.PermissionDenied, "run_id %q not in token whitelist", req.RunId)
+	}
+
 	var actions []domain.Action
 	var err error
 	switch {
@@ -39,6 +54,22 @@ func (s *Server) ListActions(ctx context.Context, req *mnemosv1.ListActionsReque
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list actions: %v", err)
 	}
+
+	// Narrow to the whitelist. Covers the subject branch (which spans runs) and
+	// the default branch (which listed the lot); the run_id branch is already
+	// inside the whitelist by the check above. Actions with no run at all are
+	// dropped too: a run-scoped token was granted named runs, and "unassigned"
+	// is not one of them — the same reading ListEpisodes takes.
+	if len(allowed) > 0 {
+		kept := actions[:0]
+		for _, a := range actions {
+			if runAllowed(allowed, a.RunID) {
+				kept = append(kept, a)
+			}
+		}
+		actions = kept
+	}
+
 	total := len(actions)
 	page := paginate(actions, limit, offset)
 	out := make([]*mnemosv1.Action, 0, len(page))

@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -70,21 +69,9 @@ func maybeClassifyRecalled(ids []string, now time.Time) bool {
 	if len(ids) == 0 || hostedConfigured() || !recallClassifyDue(now) {
 		return false
 	}
-	self, err := os.Executable()
-	if err != nil {
+	if !spawnWorker([]string{"classify-durability", "--ids", strings.Join(ids, ",")}) {
 		return false
 	}
-	args := []string{"classify-durability", "--ids", strings.Join(ids, ",")}
-	if dsn := strings.TrimSpace(os.Getenv("MNEMOS_DB_URL")); dsn != "" {
-		args = append(args, "--db", dsn)
-	}
-	cmd := exec.Command(self, args...) //nolint:gosec // self-exec with fixed args
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
-	cmd.SysProcAttr = detachSysProcAttr()
-	if err := cmd.Start(); err != nil {
-		return false
-	}
-	_ = cmd.Process.Release()
 	// Stamped on spawn rather than on success: if the classification itself
 	// hangs, stamping on success would respawn it on every prompt.
 	markRecallClassify(now)

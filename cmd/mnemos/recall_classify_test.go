@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,6 +77,31 @@ func TestMaybeClassifyRecalled_NothingToDoDoesNotStamp(t *testing.T) {
 	}
 	if _, err := os.Stat(recallClassifyStamp()); err == nil {
 		t.Fatal("a no-op must not consume the throttle window")
+	}
+}
+
+// The positive case had no coverage: every existing test here asserts that a
+// spawn does NOT happen, so nothing checked the worker's arguments. With the
+// spawn seam that is cheap to assert and costs no process.
+func TestMaybeClassifyRecalled_SpawnsWithTheRecalledIDs(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("MNEMOS_DB_URL", "")
+
+	var got []string
+	restore := stubSpawnWorker(t, func(args []string) bool {
+		got = args
+		return true
+	})
+	defer restore()
+
+	if !maybeClassifyRecalled([]string{"a", "b"}, time.Now()) {
+		t.Fatal("unclassified ids must trigger a classification worker")
+	}
+	if want := "classify-durability --ids a,b"; strings.Join(got, " ") != want {
+		t.Errorf("worker args = %q, want %q", strings.Join(got, " "), want)
+	}
+	if _, err := os.Stat(recallClassifyStamp()); err != nil {
+		t.Fatalf("spawning must stamp immediately: %v", err)
 	}
 }
 

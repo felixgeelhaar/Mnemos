@@ -32,12 +32,28 @@ func TestSleepDue_UnusableStampFailsOpen(t *testing.T) {
 	}
 }
 
+// The stamp-on-spawn contract, verified through the spawn seam.
+//
+// This test used to call maybeSleep for real, which re-execed the test binary —
+// and a Go test binary handed `consolidate` runs the whole suite, reaching this
+// test again and spawning again. That is the fork bomb described in selfexec.go.
+// It also `t.Skip`ped when the spawn failed, so the day it started misbehaving
+// it reported success either way.
+//
+// Stubbing the seam tests the actual contract (stamp on spawn, not on success)
+// without starting a process at all. See
+// TestMaybeSleep_DecisionIsTestableWithoutSpawning in selfexec_test.go for the
+// argument assertions.
 func TestMaybeSleep_StampsOnSpawnNotSuccess(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("MNEMOS_DB_URL", "memory://")
+
+	restore := stubSpawnWorker(t, func([]string) bool { return true })
+	defer restore()
+
 	now := time.Now()
 	if !maybeSleep(now) {
-		t.Skip("could not spawn in this environment")
+		t.Fatal("a due sleep must run")
 	}
 	if _, err := os.Stat(sleepStamp()); err != nil {
 		t.Fatalf("spawning must stamp immediately: %v", err)

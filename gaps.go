@@ -3,7 +3,6 @@ package mnemos
 import (
 	"context"
 	"fmt"
-	"sort"
 	"time"
 
 	"go.klarlabs.de/mnemos/internal/domain"
@@ -33,15 +32,36 @@ type Gap struct {
 	Score   float64 // expected information gain: salience × uncertainty × staleness
 }
 
-// KnowledgeGaps implements [Memory.KnowledgeGaps].
+// GapDefaultLimit is the gap count [Memory.KnowledgeGaps] returns when the
+// caller names none.
+const GapDefaultLimit = 20
+
+// KnowledgeGaps implements [Memory.KnowledgeGaps]. The result count is bounded
+// by [MaxCognitiveResults]; use [memory.KnowledgeGapsBounded] to learn whether
+// the answer was truncated.
 func (m *memory) KnowledgeGaps(ctx context.Context, limit int) ([]Gap, error) {
+	rep, err := m.KnowledgeGapsBounded(ctx, limit)
+	return rep.Gaps, err
+}
+
+// KnowledgeGapsBounded is [Memory.KnowledgeGaps] reporting the bounds it applied
+// (see [BoundedCognition]).
+//
+// The detection pass is a single linear sweep of the live corpus — measured at
+// 4 ms per 10k claims, so it is NOT the resource-exhaustion vector the pairwise
+// reads were, and it is deliberately left complete: scoring a ranked prefix of
+// the corpus would return arbitrary gaps rather than the biggest ones. What is
+// bounded is the RESPONSE, and Bounds.Available reports the true gap count.
+func (m *memory) KnowledgeGapsBounded(ctx context.Context, limit int) (GapReport, error) {
+	var bounds Bounds
+	limit = capLimit(&bounds, limit, GapDefaultLimit, MaxCognitiveResults)
 	all, err := m.conn.Claims.ListAll(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("mnemos: KnowledgeGaps: list claims: %w", err)
+		return GapReport{}, fmt.Errorf("mnemos: KnowledgeGaps: list claims: %w", err)
 	}
 	evidence, err := m.conn.Claims.ListAllEvidence(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("mnemos: KnowledgeGaps: list evidence: %w", err)
+		return GapReport{}, fmt.Errorf("mnemos: KnowledgeGaps: list evidence: %w", err)
 	}
 	evidenceCount := make(map[string]int, len(all))
 	for _, e := range evidence {
@@ -52,7 +72,7 @@ func (m *memory) KnowledgeGaps(ctx context.Context, limit int) ([]Gap, error) {
 	for _, kind := range []domain.RelationshipType{domain.RelationshipTypeValidates, domain.RelationshipTypeRefutes} {
 		edges, eerr := m.conn.EntityRels.ListByKind(ctx, string(kind))
 		if eerr != nil {
-			return nil, fmt.Errorf("mnemos: KnowledgeGaps: list %s: %w", kind, eerr)
+			return GapReport{}, fmt.Errorf("mnemos: KnowledgeGaps: list %s: %w", kind, eerr)
 		}
 		for _, e := range edges {
 			if e.ToType == domain.RelEntityClaim && e.ToID != "" {
@@ -64,7 +84,7 @@ func (m *memory) KnowledgeGaps(ctx context.Context, limit int) ([]Gap, error) {
 	contradicts := map[string]int{}
 	rels, err := m.conn.Relationships.ListAll(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("mnemos: KnowledgeGaps: list relationships: %w", err)
+		return GapReport{}, fmt.Errorf("mnemos: KnowledgeGaps: list relationships: %w", err)
 	}
 	for _, r := range rels {
 		if r.Type != domain.RelationshipTypeContradicts {
@@ -80,6 +100,8 @@ func (m *memory) KnowledgeGaps(ctx context.Context, limit int) ([]Gap, error) {
 		if !c.ValidTo.IsZero() {
 			continue // only live knowledge
 		}
+		bounds.Scanned++
+		bounds.Considered++
 		kind := ""
 		if c.Type == domain.ClaimTypeHypothesis {
 			if _, ok := resolved[c.ID]; !ok {
@@ -99,9 +121,18 @@ func (m *memory) KnowledgeGaps(ctx context.Context, limit int) ([]Gap, error) {
 		score := trust.SalienceOf(c, evidenceCount[c.ID]) * uncertainty * (0.3 + 0.7*staleness)
 		gaps = append(gaps, Gap{ClaimID: c.ID, Text: c.Text, Kind: kind, Score: score})
 	}
-	sort.SliceStable(gaps, func(i, j int) bool { return gaps[i].Score > gaps[j].Score })
-	if limit > 0 && len(gaps) > limit {
-		gaps = gaps[:limit]
+	bounds.Available = len(gaps)
+	// Rank by expected information gain, THEN cut; id breaks ties so equal-score
+	// queues are stable.
+	gaps = topN(gaps, limit, func(a, b Gap) bool {
+		if a.Score != b.Score {
+			return a.Score > b.Score
+		}
+		return a.ClaimID < b.ClaimID
+	})
+	if bounds.Available > len(gaps) {
+		bounds.cut(BoundReasonResultLimit)
 	}
-	return gaps, nil
+	bounds.finish(len(gaps))
+	return GapReport{Gaps: gaps, Bounds: bounds}, nil
 }

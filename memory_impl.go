@@ -603,11 +603,27 @@ func (m *memory) Get(ctx context.Context, claimID string) (Claim, error) {
 
 // Scan implements [Memory.Scan]. Returns claims whose valid-time interval
 // overlaps the [ScanQuery] window, ordered by ValidFrom, honouring Limit.
+//
+// A zero Limit no longer means "the whole brain": it means
+// [ScanMaxResults], which is also the ceiling on an explicit Limit. Scan is
+// reachable over MCP and HTTP, where Limit: 0 made a full corpus dump a one-line
+// request. Use [memory.ScanBounded] to learn whether the answer was truncated.
 func (m *memory) Scan(ctx context.Context, q ScanQuery) ([]Claim, error) {
+	rep, err := m.ScanBounded(ctx, q)
+	return rep.Claims, err
+}
+
+// ScanBounded is [Memory.Scan] reporting the bounds it applied (see
+// [BoundedCognition]).
+func (m *memory) ScanBounded(ctx context.Context, q ScanQuery) (ScanReport, error) {
+	var bounds Bounds
+	limit := capLimit(&bounds, q.Limit, ScanMaxResults, ScanMaxResults)
 	all, err := m.conn.Claims.ListAll(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("mnemos: Scan: %w", err)
+		return ScanReport{}, fmt.Errorf("mnemos: Scan: %w", err)
 	}
+	bounds.Scanned = len(all)
+	bounds.Considered = len(all)
 	out := make([]Claim, 0, len(all))
 	for _, c := range all {
 		if !claimOverlapsWindow(c, q.ValidFrom, q.ValidUntil) {
@@ -615,11 +631,21 @@ func (m *memory) Scan(ctx context.Context, q ScanQuery) ([]Claim, error) {
 		}
 		out = append(out, toPublicClaim(c))
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ValidFrom.Before(out[j].ValidFrom) })
-	if q.Limit > 0 && len(out) > q.Limit {
-		out = out[:q.Limit]
+	bounds.Available = len(out)
+	// Order by ValidFrom (the endpoint's own ranking) BEFORE cutting, so a
+	// truncated scan is the earliest window, not an arbitrary slice of the store's
+	// listing order. Id breaks ties so equal-timestamp windows page stably.
+	out = topN(out, limit, func(a, b Claim) bool {
+		if !a.ValidFrom.Equal(b.ValidFrom) {
+			return a.ValidFrom.Before(b.ValidFrom)
+		}
+		return a.ID < b.ID
+	})
+	if bounds.Available > len(out) {
+		bounds.cut(BoundReasonResultLimit)
 	}
-	return out, nil
+	bounds.finish(len(out))
+	return ScanReport{Claims: out, Bounds: bounds}, nil
 }
 
 // claimOverlapsWindow reports whether a claim's valid-time interval
@@ -1839,9 +1865,52 @@ func (m *memory) forgetStaleClaims(ctx context.Context, belowTrust float64, prot
 // so its contradiction is ordinary epistemic churn, not an alert.
 const hypercorrectionTrustFloor = 0.7
 
+// HypercorrectionDefaultLimit is the alert count [Memory.Hypercorrections]
+// returns when the caller names none. The surface had no limit at all, so the
+// response grew with the corpus — 300 alerts on a 10k-claim brain, ~1,500 on a
+// 50k one, each carrying two claim statements. It is the front of a curation
+// queue, and nobody reconciles more than a screenful at a time.
+const HypercorrectionDefaultLimit = 50
+
 // Hypercorrections implements [Memory.Hypercorrections]. It reads the epistemic
 // graph — no recomputation — so it's a cheap, on-demand metacognition query.
+//
+// Bounded to [HypercorrectionDefaultLimit] most-established-first alerts; use
+// [memory.HypercorrectionsBounded] for a different limit or to learn whether the
+// answer was truncated.
 func (m *memory) Hypercorrections(ctx context.Context) ([]Hypercorrection, error) {
+	rep, err := m.HypercorrectionsBounded(ctx, 0)
+	return rep.Hypercorrections, err
+}
+
+// HypercorrectionsBounded is [Memory.Hypercorrections] reporting the bounds it
+// applied (see [BoundedCognition]). Bounds.Available is the true alert count —
+// the detection pass is complete, only the response is capped.
+func (m *memory) HypercorrectionsBounded(ctx context.Context, limit int) (HypercorrectionReport, error) {
+	var bounds Bounds
+	limit = capLimit(&bounds, limit, HypercorrectionDefaultLimit, MaxCognitiveResults)
+	all, err := m.hypercorrectionList(ctx)
+	if err != nil {
+		return HypercorrectionReport{}, err
+	}
+	bounds.Scanned = len(all)
+	bounds.Considered = len(all)
+	bounds.Available = len(all)
+	// hypercorrectionList already ranks most-established-first, so this cut keeps
+	// the front of the curation queue rather than an arbitrary prefix.
+	out := all
+	if len(out) > limit {
+		out = out[:limit]
+		bounds.cut(BoundReasonResultLimit)
+	}
+	bounds.finish(len(out))
+	return HypercorrectionReport{Hypercorrections: out, Bounds: bounds}, nil
+}
+
+// hypercorrectionList is the complete, ranked detection pass. Callers that need
+// a COUNT rather than a page (the dissonance level of [Memory.PredictiveError])
+// use it directly so the capped response never distorts a metric.
+func (m *memory) hypercorrectionList(ctx context.Context) ([]Hypercorrection, error) {
 	rels, err := m.conn.Relationships.ListAll(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("mnemos: Hypercorrections: list relationships: %w", err)
@@ -2002,7 +2071,10 @@ func (m *memory) PredictiveError(ctx context.Context) (PredictiveError, error) {
 
 	// Level 3 — dissonance: active high-stakes contradictions per belief.
 	diss := PredictiveErrorLevel{Level: "dissonance"}
-	hyper, herr := m.Hypercorrections(ctx)
+	// The complete list, not the capped response: this is a rate, so a page of
+	// alerts would silently floor the dissonance error once the brain grew past
+	// HypercorrectionDefaultLimit contradictions.
+	hyper, herr := m.hypercorrectionList(ctx)
 	if herr != nil {
 		return PredictiveError{}, fmt.Errorf("mnemos: PredictiveError: dissonance: %w", herr)
 	}
