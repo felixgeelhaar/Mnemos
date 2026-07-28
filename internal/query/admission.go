@@ -90,6 +90,29 @@ func admitClaims(claims []domain.Claim, opts AnswerOptions, now time.Time) []dom
 	// queryable — this governs recall, not retention.
 	out := excludeDeprecated(claims)
 
+	// Drop claims an LLM judged SESSION-LOCAL: conversational narration stored
+	// as a belief, which was never knowledge.
+	//
+	// The brain is full of them because extraction silently fell back to
+	// rule-based on every capture, which over a transcript yields fragments like
+	// "Now the doctor output:" and "Let me clean those up first" as facts. That
+	// is fixed going forward, but the backlog does not un-write itself: 4,064
+	// claims on one real brain carry a `session` verdict, and every one was
+	// eligible for recall — so those fragments kept being injected as context at
+	// trust scores around 0.67.
+	//
+	// Filtering at recall rather than deleting is the proportionate move. The
+	// verdict comes from a classifier with a measured error profile that
+	// over-calls durable (it under-suppresses), and a claim wrongly judged
+	// session-local should cost one absent recall, not an erased belief. Nothing
+	// is deprecated, nothing is deleted, every audit path still sees them: this
+	// governs recall, not retention — exactly as the deprecated filter does.
+	//
+	// Unknown/unset durability is deliberately NOT filtered. 80,703 claims are
+	// still unclassified, and treating "not yet judged" as "narration" would
+	// empty the brain. Suppression grows as classification does.
+	out = keepClaims(out, func(c domain.Claim) bool { return !c.Durability.IsSessionLocal() })
+
 	rescoreCredibility(out, now)
 
 	// Entity scope: if the caller restricted the answer to claims
