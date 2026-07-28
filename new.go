@@ -258,7 +258,7 @@ func buildExtractor(m mode, lc llm.Client) (*pipeline.Extractor, error) {
 	// Use the pipeline's LLM extractor so token usage is captured into
 	// LastUsage — the bridge that lets the kernel's MaxTokens budget sum
 	// real spend across each governed write.
-	return pipeline.NewLLMExtractor(lc), nil
+	return pipeline.NewLLMExtractor(lc, pipeline.ExtractionCacheDir()), nil
 }
 
 // resolveDSN mirrors cmd/mnemos's DSN resolution: MNEMOS_DB_URL > a

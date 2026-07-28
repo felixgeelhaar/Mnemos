@@ -52,6 +52,18 @@ func NewLLMEngine(client llm.Client) LLMEngine {
 	}
 }
 
+// WithCacheDir overrides where extraction responses are cached.
+//
+// The default is RELATIVE, so it resolves against the process's working
+// directory — which for mnemos is the user's repository rather than a stable
+// location, scattering cache files across projects and splitting one cache into
+// N partial ones. Callers that know the user's data directory should set it
+// here. An empty dir disables caching.
+func (e LLMEngine) WithCacheDir(dir string) LLMEngine {
+	e.cacheDir = dir
+	return e
+}
+
 // WithUsageSink registers a callback the engine invokes after a
 // successful LLM call, reporting the token counts the provider
 // returned. Used by the pipeline layer to surface token usage as

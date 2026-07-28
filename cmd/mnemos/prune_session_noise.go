@@ -105,7 +105,7 @@ func pruneSessionNoise(dryRun bool, f Flags) {
 			// slice of the budget so persisting the result is always possible.
 			classifyCtx, cancelClassify := withWriteReserve(ctx)
 			defer cancelClassify()
-			verdicts, err := extract.ClassifyDurabilityCached(classifyCtx, client, texts, extract.DurabilityCacheDir)
+			verdicts, err := extract.ClassifyDurabilityCached(classifyCtx, client, texts, durabilityCacheDir())
 			if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 				return NewSystemError(err, "classify durability")
 			}
