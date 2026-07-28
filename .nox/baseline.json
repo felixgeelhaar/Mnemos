@@ -1001,6 +1001,14 @@
       "file_path": "internal/store/sqlite/lesson_hydration_test.go",
       "severity": "medium",
       "created_at": "2026-07-27T07:26:59.576707Z"
+    },
+    {
+      "fingerprint": "f6e5856e7552aa79977eb9f52c8c4c88387ce9fbbe12a20a17a9ced43c45e46a",
+      "rule_id": "SEC-073",
+      "file_path": "internal/query/pgvector_integration_test.go",
+      "severity": "critical",
+      "reason": "False positive. The match is inside a comment block: a copy-pasteable `docker run` + `export` pair telling a developer how to bring up a throwaway local pgvector container for this test suite. The \"credentials\" are `mnemos:mnemos` on 127.0.0.1:55440, for a container the two preceding comment lines instruct the reader to create with that same password. No secret is disclosed — the string is the setup instruction, not a credential to anything that exists. The real DSN is read from TEST_POSTGRES_DSN at runtime (pgDSNOrSkip), and the suite skips when it is unset.",
+      "created_at": "2026-07-28T05:35:29.413321Z"
     }
   ]
 }
