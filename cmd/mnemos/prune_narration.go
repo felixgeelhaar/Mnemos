@@ -167,6 +167,8 @@ func handlePrune(args []string, f Flags) {
 		pruneNarration(f.DryRun, f)
 	case "session-noise":
 		pruneSessionNoise(f.DryRun, f)
+	case "session-local":
+		pruneSessionLocal(f.DryRun, f)
 	}
 }
 
@@ -182,8 +184,10 @@ func parsePruneArgs(args []string) (target string, err error) {
 			targets = append(targets, "narration")
 		case "--session-noise":
 			targets = append(targets, "session-noise")
+		case "--session-local":
+			targets = append(targets, "session-local")
 		default:
-			return "", NewUserError("unknown prune flag %q (want --narration|--session-noise [--dry-run])", a)
+			return "", NewUserError("unknown prune flag %q (want --narration|--session-noise|--session-local [--dry-run])", a)
 		}
 	}
 	switch len(targets) {
