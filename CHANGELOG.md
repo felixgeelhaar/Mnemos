@@ -8,6 +8,81 @@ notable changes.
 
 ## [Unreleased]
 
+## [0.119.0] — 2026-07-28
+
+A performance and containment release. The three perf items share a shape: a
+read that was correct and unbounded, measured only once someone put a counter on
+it. The headline fix is different in kind — a bug that consumed a machine for
+hours while every test run it came from reported success.
+
+### Fixed
+
+- **A test run could fork-bomb the machine** (#307). Four background chores
+  re-exec this binary as a detached worker — nightly consolidation, health
+  snapshot, durability classification, incremental capture. Under `go test`,
+  `os.Executable()` resolves to the compiled **test** binary, and a Go test
+  binary handed a subcommand it does not recognise does not error: it ignores
+  the unknown arguments and runs the whole suite. So a detached self-exec from a
+  test started a second copy of the suite, which reached the same call site and
+  started a third.
+
+  Nothing surfaced it, because every child is detached with nil stdio — the test
+  run looks entirely normal while the machine fills up behind it. Observed on a
+  dev machine: **~1000 stray `mnemos.test` processes and a load average near
+  900**, sustained for hours, cleared only by a reboot. It starved unrelated
+  work badly enough to fail another repository's CI on a lint timeout, which is
+  how it was found — not by any test.
+
+  `underTest()` now makes "am I a test binary?" a precondition of self-exec
+  rather than something each call site must remember, checking two independent
+  signals (the `-test.*` flags the testing package registers, and the `.test`
+  suffix the toolchain applies). The bias is deliberate: a false positive costs
+  one skipped background chore in a test run; a false negative costs the above.
+
+  The two tests covering these spawn sites could not have caught this — they
+  called the functions for real and `t.Skip`ped when the spawn failed, reporting
+  success either way. They now assert the decision and its arguments through a
+  seam, and `maybeClassifyRecalled` gained the positive test it never had.
+
+- **Two run-scope read leaks in gRPC** (#303). `ListActions` honoured a
+  caller-supplied `run_id` without consulting the allowlist, so a run-scoped
+  bearer could read every run's operational history — by naming someone else's
+  run, by filtering on a subject instead, or by asking for nothing at all. It
+  now follows the `ListBeliefs` convention: an out-of-allowlist explicit
+  `run_id` is `PermissionDenied` rather than an empty page, since a caller
+  cannot distinguish "no actions" from "not yours" and will read the first as
+  fact. Also stops a cached `Memory` pinning a pooled connection.
+
+- **Claim deletion means the same thing on every backend** (#299), and entities
+  are unlinked before a claim is deleted (#301).
+
+### Performance
+
+- **Recall stops decoding the whole embedding table** (#306). The Claude Code
+  recall hook materialised every vector in the store on each invocation.
+  Measured per leg at n=10k before the change: `events ListAll` 192 ms / 15.6 MB,
+  event cosine 431 ms / 56.3 MB with 10,000 vectors materialised.
+
+- **Discovery reads are bounded** (#305). `Recombinations` paired every
+  high-salience live claim with every other — 1.3 s at 1k claims, 50.6 s at 10k,
+  and ~1.25e9 pair evaluations at 50k, all behind a single MCP/REST request.
+  It now ranks candidates by salience and bounds the scan to a top-400 set.
+  **50k Recombinations went from OOM-killed to ~1 s; `AnalogousClaims` from
+  36,176 store round trips to 2.**
+
+- **`DetectIncremental` narrows its candidate set** with an exact token index,
+  and the divergence detectors take precomputed per-claim state instead of
+  re-deriving it on every pairwise call (#302).
+
+Each of the three landed with a measurement harness first — deterministic
+round-trip counters and synthetic corpora — so the bounds are argued from
+numbers rather than intuition.
+
+### Security
+
+- nox remediation for dependencies and pinned actions (#304); eight false
+  positives on RFC-reserved test fixtures baselined with justification (#298).
+
 ## [0.118.0] — 2026-07-27
 
 A security and correctness release. Almost every item below is the same class of
