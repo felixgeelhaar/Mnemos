@@ -71,8 +71,54 @@ func markSleep(now time.Time) {
 // plus the LLM session-noise clearing. It deliberately omits aggressive
 // trust-floor forgetting — that is a policy choice an operator makes explicitly,
 // not something an unattended nightly pass should do.
+//
+// It previously ran four of the twelve organs, and the eight it skipped were the
+// ones that BUILD anything: the skill loop and credit assignment never ran at
+// all. Measured on a brain with 86,190 claims — lessons 0, playbooks 0,
+// global_schemas 0, claim_expectations 0, claim_feedback 0, cognitive_journal 6.
+// Not because the layers were broken; `actions_test.go` exercises the whole loop
+// successfully through the public API. Nothing invoked them.
+//
+// Their own documentation says where they belong. Synthesize is "the
+// auto-trigger arrow of the skill loop, so skills stay current without a manual
+// CLI run"; ReinforcePlaybooks is "the skill-learning half of the sleep pass";
+// AssignCredit is "the capstone learning loop". Each described itself as part of
+// a pass that never set it.
+//
+// Every organ added here is documented as idempotent or a no-op without the
+// layer it feeds, so on a brain with no actions or outcomes this pass costs a
+// few queries and changes nothing — it starts working the moment outcomes exist,
+// rather than needing someone to notice it was never wired.
+//
+// Still deliberately excluded:
+//   - --forget-below-trust: destructive, and an operator's policy call (above).
+//   - --replay-top-k: takes a tuning value rather than being a plain toggle;
+//     picking one unattended is a decision this function should not make.
 func sleepArgs() []string {
-	return []string{"consolidate", "--forget-refuted", "--reinforce-validated", "--salience", "--clear-session-noise"}
+	return []string{
+		"consolidate",
+		// Prediction-error routed both ways (unchanged).
+		"--forget-refuted",
+		"--reinforce-validated",
+		"--salience",
+		"--clear-session-noise",
+		// The learning loop: outcomes update belief trust (ADR 0014), with the
+		// ADR-0015 adaptive learning rates that only apply alongside it.
+		"--credit",
+		"--plastic",
+		// The skill loop: lessons from actions-with-outcomes, playbooks from
+		// lessons, then playbook confidence tuned by observed success.
+		// Synthesize runs before ReinforcePlaybooks internally, so a playbook
+		// derived this pass is tuned in the same pass.
+		"--synthesize",
+		"--reinforce-playbooks",
+		// Decay: association strength tracks RECENT use, and retrieval-induced
+		// suppression expires unless renewed. Neither deletes anything.
+		"--decay-associations",
+		"--decay-inhibition",
+		// Record what the pass did (ADR 0018). Never changes what it computes.
+		"--journal",
+	}
 }
 
 // maybeSleep spawns a detached consolidation when one is due, so the brain
