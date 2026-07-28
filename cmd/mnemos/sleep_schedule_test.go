@@ -95,3 +95,52 @@ func TestSleepArgs(t *testing.T) {
 		t.Error("an unattended nightly pass must not do aggressive trust-floor forgetting")
 	}
 }
+
+// The sleep pass must actually run the organs that BUILD the derived layers.
+//
+// It previously ran four of twelve, and the eight it skipped were exactly the
+// ones that construct anything — so on a brain with 86,190 claims, lessons,
+// playbooks, global_schemas, claim_expectations and claim_feedback were all
+// empty. Not because those layers were broken (actions_test.go exercises the
+// whole loop through the public API) but because nothing invoked them.
+//
+// Each flag here is named in its own documentation as belonging to this pass:
+// Synthesize is "the auto-trigger arrow of the skill loop", ReinforcePlaybooks
+// "the skill-learning half of the sleep pass", AssignCredit "the capstone
+// learning loop".
+func TestSleepArgs_RunsTheLearningAndSkillLoops(t *testing.T) {
+	args := sleepArgs()
+	has := func(f string) bool {
+		for _, a := range args {
+			if a == f {
+				return true
+			}
+		}
+		return false
+	}
+
+	for flag, why := range map[string]string{
+		"--credit":              "outcomes must update belief trust, or the learning loop stays open (ADR 0014)",
+		"--plastic":             "credit assignment needs its adaptive learning rates (ADR 0015)",
+		"--synthesize":          "lessons and playbooks are never derived otherwise — the skill store stays empty",
+		"--reinforce-playbooks": "without it the skill store is write-only, never tuned by real outcomes",
+		"--decay-associations":  "association strength must track recent use, not a lifetime tally",
+		"--decay-inhibition":    "retrieval suppression must expire unless renewed",
+		"--journal":             "a pass that records nothing cannot be tuned against real data (ADR 0018)",
+	} {
+		if !has(flag) {
+			t.Errorf("nightly sleep is missing %s: %s", flag, why)
+		}
+	}
+}
+
+// --replay-top-k takes a tuning value rather than being a plain toggle, so an
+// unattended pass should not pick one. Guarding it here so a future "enable
+// everything" edit has to make that choice deliberately.
+func TestSleepArgs_OmitsValueTunedOrgans(t *testing.T) {
+	for _, a := range sleepArgs() {
+		if a == "--replay-top-k" {
+			t.Error("--replay-top-k needs a tuning value; the nightly pass must not choose one implicitly")
+		}
+	}
+}
