@@ -1520,6 +1520,7 @@ func printUsage() {
 	fmt.Println("  dedup [--threshold T] [--force]      Merge near-duplicate claims by embedding similarity (dry-run by default)")
 	fmt.Println("  prune --narration [--dry-run]        Deprecate stored conversational pollution the extraction filter now catches")
 	fmt.Println("  prune --session-noise [--dry-run]    Drop contradiction edges where an LLM judges both claims session-local (edges only)")
+	fmt.Println("  prune --session-local [--dry-run]    Deprecate beliefs already judged session-local (claims, not just edges)")
 	fmt.Println("  classify-durability [--limit N]      Record whether a belief outlives its session; targets the highest-trust unclassified ones")
 	fmt.Println("  consolidate [--dry-run] [--forget-below-trust T]  The cognitive \"sleep\" pass: dedupe + refresh trust,")
 	fmt.Println("    [--forget-refuted] [--synthesize]  and optionally forget/reinforce/synthesize/replay. Deterministic.")
