@@ -87,9 +87,30 @@ func (c *OpenAIClient) Complete(ctx context.Context, messages []Message) (Respon
 		Stream:   false,
 	}
 
-	// Enable JSON mode when the system prompt asks for JSON output.
+	// Enable JSON mode when the system prompt asks for a JSON OBJECT.
+	//
+	// The qualifier is the whole point. `response_format: json_object` constrains
+	// the model to emit a top-level OBJECT, so a prompt asking for a top-level
+	// ARRAY cannot be satisfied — and models resolve that contradiction by
+	// returning `{}`. Valid JSON, constraint honoured, no content.
+	//
+	// Measured against a live qwen2.5:3b with mnemos's own extraction prompt:
+	//
+	//	without response_format : [{"text":"…","type":"decision","entities":[…]}]
+	//	with    json_object     : {}
+	//
+	// `{}` then fails to unmarshal into []llmClaim, and extractBatch treats a
+	// parse error as "the model misbehaved" and falls back to rule-based
+	// extraction — silently. So LLM extraction never actually ran: every
+	// captured session was rule-based, which on conversational text stores
+	// fragments of narration as beliefs and extracts no entities at all.
+	//
+	// Nothing surfaced it because every layer behaved "correctly": the request
+	// was accepted, the response was valid JSON, the parse failure had a
+	// designed fallback, and the fallback produced claims. Only the CONTENT was
+	// wrong, and nothing compares content.
 	for _, m := range messages {
-		if m.Role == RoleSystem && strings.Contains(m.Content, "JSON") {
+		if m.Role == RoleSystem && strings.Contains(m.Content, "JSON") && !wantsJSONArray(m.Content) {
 			reqBody.ResponseFormat = &openAIResponseFmt{Type: "json_object"}
 			break
 		}
