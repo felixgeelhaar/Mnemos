@@ -205,6 +205,14 @@ var parityMatrix = []parityEntry{
 	// Phase 2 (action / outcome) — gRPC + MCP, no HTTP.
 	{Capability: "record action", MCPTool: "record_action", HTTPRoute: parityNA, GRPCMethod: parityNA},
 	{Capability: "record outcome", MCPTool: "record_outcome", HTTPRoute: parityNA, GRPCMethod: parityNA},
+	// These three existed on HTTP only until the MCP counterparts were added.
+	// The asymmetry was not deliberate: it is why claim_expectations and
+	// claim_feedback sat empty on a brain with 86k claims, since the surface
+	// that does the recalling had no way to record a prediction or say a
+	// recalled belief was unhelpful.
+	{Capability: "record expectation", MCPTool: "record_expectation", HTTPRoute: "POST /v1/beliefs/{id}/expectation", GRPCMethod: parityNA},
+	{Capability: "record observation", MCPTool: "record_observation", HTTPRoute: "POST /v1/beliefs/{id}/observation", GRPCMethod: parityNA},
+	{Capability: "record feedback", MCPTool: "record_feedback", HTTPRoute: "POST /v1/beliefs/{id}/feedback", GRPCMethod: parityNA},
 	{Capability: "list actions (gRPC)", MCPTool: parityNA, HTTPRoute: parityNA, GRPCMethod: "ListActions"},
 	{Capability: "append actions (gRPC)", MCPTool: parityNA, HTTPRoute: parityNA, GRPCMethod: "AppendActions"},
 	{Capability: "list outcomes (gRPC)", MCPTool: parityNA, HTTPRoute: parityNA, GRPCMethod: "ListOutcomes"},
