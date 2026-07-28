@@ -8,6 +8,97 @@ notable changes.
 
 ## [Unreleased]
 
+## [0.120.0] — 2026-07-28
+
+**LLM extraction had never actually run.** Every captured session silently fell
+back to rule-based extraction, and everything downstream — entities, the skill
+layer, recall quality — followed from that. This release fixes it and the four
+further defects stacked behind it, each hidden by the one before.
+
+Measured on a real brain before this release: 86,190 claims, **0 entities, 0
+actions, 0 outcomes, 0 lessons, 0 playbooks**, and 45,832 live contradiction
+edges with `mnemos health` unhealthy on dissonance.
+
+### Fixed
+
+- **Extraction now runs at all** (#316). The OpenAI-compatible client enabled
+  `response_format: json_object` whenever a system prompt contained the string
+  "JSON". That mode constrains the model to a top-level *object*, while the
+  extraction prompt asks for a top-level *array* — so the model returned `{}`,
+  the parse failed, and `extractBatch` took its silent rule-based fallback.
+  Measured against a live model, same endpoint and messages:
+
+      without response_format : [{"text":"…","type":"decision","entities":[…]}]
+      with    json_object     : {}
+
+  Rule-based extraction over a conversation transcript stores fragments of
+  narration as beliefs — "Now the doctor output:", "Let me clean those up
+  first" — which then contradict each other. That is the origin of this brain's
+  dissonance, and of the low-value recall context that came with it.
+
+  Nothing surfaced it because every layer behaved correctly: the request was
+  accepted, the response was valid JSON, the parse failure had a designed
+  fallback, and the fallback produced claims. Only the *content* was wrong, and
+  nothing compares content — `doctor` reports that a provider is reachable, not
+  that it is being used.
+
+- **The capture hook detects an auto-detected LLM** (#312). It tested
+  `MNEMOS_LLM_PROVIDER` directly, while `llm.ConfigFromEnv` also auto-detects a
+  local Ollama — the zero-config path this project documents. On exactly that
+  setup the hook concluded there was no LLM and captured everything rule-based.
+
+- **The governed write path persists entities** (#314). It discarded the
+  extractor's entity map into `_` while the CLI materialised it. That path is
+  what MCP `process_text`, and therefore every capture hook, goes through.
+
+- **Recall stops surfacing session-local claims** (#318). Nothing between the
+  store and the answer consulted the durability verdict, so narration the
+  classifier had already identified was injected as context anyway — 4,064
+  claims on a real brain. Filtered at recall, not deleted: the classifier
+  over-calls durable, so a wrong verdict costs one absent recall rather than an
+  erased belief. Unclassified claims are unaffected.
+
+- **The LLM caches resolve against the data directory, not the CWD** (#311).
+  Both defaulted to relative paths, so they were written into whichever
+  repository the session was in — 6,108 files in one, 1,474 in another, across
+  six repos, none gitignored. Worse than the mess: a cache keyed to the working
+  directory is N partial caches, so the durability classifier's resumability
+  guarantee could never hold.
+
+### Added
+
+- **Operational actions and outcomes are derived from transcripts** (#317). The
+  `action → outcome → lesson → playbook` loop was fully implemented and empty,
+  because ADR 0002 expects outcomes from explicit API calls or metric pull
+  adapters and a Claude Code session produces neither. Every transcript already
+  carries paired `tool_use`/`tool_result` blocks joined by `tool_use_id`, and
+  the capture path stepped over them: a tool call *is* an action, its result
+  *is* the outcome, `is_error` *is* the verdict.
+
+  Deliberately selective — 196 of 753 tool calls in a sampled session — because
+  `ActionItem.Subject` notes that clusters form from repeated (kind, subject)
+  pairs. Recording everything would bury that signal, which is the same failure
+  that filled this brain with narration.
+
+  Verified end to end on a real transcript: 198 actions and outcomes became 10
+  lessons and 10 playbooks, including *"build on warden reliably succeeds in
+  this corpus"* (confidence 0.9998).
+
+- **The nightly sleep runs the organs that build the derived layers** (#315). It
+  ran 4 of 12, and the 8 it skipped were the ones that construct anything —
+  `--credit`, `--synthesize`, `--reinforce-playbooks`, `--journal` and the decay
+  pair among them. Each names this pass in its own documentation: `Synthesize`
+  is "the auto-trigger arrow of the skill loop", `ReinforcePlaybooks` "the
+  skill-learning half of the sleep pass". `--forget-below-trust` stays excluded
+  as an operator's policy call.
+
+### Note on the backlog
+
+These fixes are **forward-looking**. Existing claims and contradiction edges
+were produced by the old path and are not rewritten; #318 makes the identified
+narration invisible to recall, and the rest decays or can be pruned
+deliberately. See #308.
+
 ## [0.119.0] — 2026-07-28
 
 A performance and containment release. The three perf items share a shape: a
