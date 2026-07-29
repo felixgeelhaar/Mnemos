@@ -2141,6 +2141,11 @@ const (
 
 	// healthLowTrustFloor is the trust below which a belief counts toward low_trust.
 	healthLowTrustFloor = 0.30
+	// healthSkillCoverage* grade the share of actions with NO observed outcome.
+	// Generous thresholds: a run still in flight legitimately has unobserved
+	// actions, so this is meant to catch a loop that never closes, not one
+	// mid-cycle.
+	healthSkillCoverageWarn, healthSkillCoverageCrit = 0.50, 0.90
 	// healthStalenessHorizonDays: a currently-valid belief not verified/created within
 	// this window counts toward staleness (a recency proxy for freshness decay).
 	healthStalenessHorizonDays = 90.0
@@ -2160,8 +2165,85 @@ func gradeHigherWorse(value, warn, crit float64) HealthStatus {
 	}
 }
 
+// gradeWithSamples grades a vital only when something was actually measured.
+//
+// Zero samples yields HealthUnknown rather than the healthy that a 0.0 value
+// would otherwise earn. Calibration is the live case: expected calibration error
+// is 0.0 over an empty set, which is arithmetically true and reads as a clean
+// bill of health for a signal nobody has fed.
+
+// skillCoverageVital reports whether the derived layers are actually being
+// built: outcomes observed per action, and whether any lesson was synthesised
+// from them.
+//
+// Every other vital is computed over CLAIMS. Nothing measured the skill layer,
+// so a brain could carry 86,505 beliefs with zero actions, zero outcomes and
+// zero lessons and report five green vitals — which is exactly what happened
+// here, and why finding it took a manual row count across 18 tables rather than
+// a glance at `mnemos health`.
+//
+// The measure is the OUTCOME RATE rather than a raw count. Counts only say a
+// store is non-empty; the rate says the loop is closing. An action with no
+// observed outcome teaches nothing, and a pile of them is the specific failure
+// worth surfacing: something is recording what was done but never what came of
+// it.
+//
+// No actions at all is HealthUnknown, not unhealthy. A brain that has performed
+// no operations has nothing to learn from yet, and grading that as a problem
+// would make every fresh install look broken.
+func (m *memory) skillCoverageVital(ctx context.Context) Vital {
+	const name = "skill_coverage"
+	if m.conn.Actions == nil || m.conn.Outcomes == nil {
+		return Vital{name, 0, HealthUnknown, "action/outcome layer not supported by this store"}
+	}
+	actions, err := m.conn.Actions.ListAll(ctx)
+	if err != nil {
+		return Vital{name, 0, HealthUnknown, "could not read actions: " + err.Error()}
+	}
+	if len(actions) == 0 {
+		return Vital{name, 0, HealthUnknown, "no actions recorded yet; nothing to learn from"}
+	}
+	outcomes, err := m.conn.Outcomes.ListAll(ctx)
+	if err != nil {
+		return Vital{name, 0, HealthUnknown, "could not read outcomes: " + err.Error()}
+	}
+	observed := map[string]struct{}{}
+	for _, o := range outcomes {
+		observed[o.ActionID] = struct{}{}
+	}
+	covered := 0
+	for _, a := range actions {
+		if _, ok := observed[a.ID]; ok {
+			covered++
+		}
+	}
+	rate := float64(covered) / float64(len(actions))
+
+	lessons := 0
+	if m.conn.Lessons != nil {
+		if ls, lerr := m.conn.Lessons.ListAll(ctx); lerr == nil {
+			lessons = len(ls)
+		}
+	}
+	detail := fmt.Sprintf("%d/%d actions have an observed outcome; %d lesson(s) derived",
+		covered, len(actions), lessons)
+
+	// Graded on the UNCOVERED share so it reads like the other vitals, where
+	// higher is worse.
+	return Vital{name, rate, gradeHigherWorse(1-rate, healthSkillCoverageWarn, healthSkillCoverageCrit), detail}
+}
+
+func gradeWithSamples(samples int, value, warn, crit float64) HealthStatus {
+	if samples <= 0 {
+		return HealthUnknown
+	}
+	return gradeHigherWorse(value, warn, crit)
+}
+
 func worseHealth(a, b HealthStatus) HealthStatus {
-	rank := map[HealthStatus]int{HealthOK: 0, HealthDegraded: 1, HealthUnhealthy: 2}
+	// HealthUnknown ranks BELOW ok: an unmeasured vital must not raise the
+	// overall verdict, or every fresh brain would report degraded.
+	rank := map[HealthStatus]int{HealthUnknown: -1, HealthOK: 0, HealthDegraded: 1, HealthUnhealthy: 2}
 	if rank[b] > rank[a] {
 		return b
 	}
@@ -2248,7 +2330,7 @@ func (m *memory) BrainHealth(ctx context.Context) (BrainHealth, error) {
 	vitals := []Vital{
 		{"free_energy", pe.Total, gradeHigherWorse(pe.Total, healthFreeEnergyWarn, healthFreeEnergyCrit),
 			fmt.Sprintf("overall prediction-error aggregate; most wrong at: %s", orNone(pe.Hotspot))},
-		{"calibration", cal.ECE, gradeHigherWorse(cal.ECE, healthCalibrationWarn, healthCalibrationCrit),
+		{"calibration", cal.ECE, gradeWithSamples(cal.Samples, cal.ECE, healthCalibrationWarn, healthCalibrationCrit),
 			fmt.Sprintf("expected calibration error over %d adjudicated belief(s)", cal.Samples)},
 		{"dissonance", dissonance, gradeHigherWorse(dissonance, healthDissonanceWarn, healthDissonanceCrit),
 			"active high-stakes contradictions per belief"},
@@ -2256,6 +2338,7 @@ func (m *memory) BrainHealth(ctx context.Context) (BrainHealth, error) {
 			fmt.Sprintf("%d/%d valid beliefs below trust %.2f", lowTrust, validCount, healthLowTrustFloor)},
 		{"staleness", stalenessRate, gradeHigherWorse(stalenessRate, healthStalenessWarn, healthStalenessCrit),
 			fmt.Sprintf("%d/%d valid beliefs unverified in %.0f days", stale, validCount, healthStalenessHorizonDays)},
+		m.skillCoverageVital(ctx),
 	}
 
 	// --- Pathologies (integrity checks that did not exist before) ---

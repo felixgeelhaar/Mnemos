@@ -944,6 +944,21 @@ const (
 	HealthDegraded HealthStatus = "degraded"
 	// HealthUnhealthy — a vital or pathology crossed its critical threshold.
 	HealthUnhealthy HealthStatus = "unhealthy"
+
+	// HealthUnknown marks a vital with NO DATA behind it, distinct from one
+	// measured and found fine.
+	//
+	// Reporting "healthy" for an unmeasured signal is the failure mode this
+	// codebase has hit repeatedly: a skipped CI step reads as a passed one, and
+	// `doctor` reporting a reachable LLM read as a working one while extraction
+	// silently fell back for months. Calibration was the instance here — 0.0000
+	// over ZERO adjudicated beliefs, rendered green.
+	//
+	// It does not roll up into the overall verdict (see worseHealth): "we did not
+	// measure this" is not evidence of a problem, only the absence of evidence of
+	// one. The distinction has to be visible in the row rather than buried in its
+	// detail string, because the status is what anyone actually scans.
+	HealthUnknown HealthStatus = "unknown"
 )
 
 // Vital is one brain-health vital sign (ADR 0019): a measured value plus its own
