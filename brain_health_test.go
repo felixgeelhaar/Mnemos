@@ -38,8 +38,12 @@ func TestBrainHealth_EmptyIsHealthy(t *testing.T) {
 	if h.Status != HealthOK {
 		t.Errorf("empty brain status = %q, want healthy", h.Status)
 	}
-	if len(h.Vitals) != 5 {
-		t.Errorf("want 5 vitals, got %d", len(h.Vitals))
+	// Six since skill_coverage was added: the five claim-derived vitals plus
+	// one measuring whether the action -> outcome -> lesson layer is actually
+	// being built. The count is pinned deliberately — a vital silently
+	// disappearing is the failure this assertion exists to catch.
+	if len(h.Vitals) != 6 {
+		t.Errorf("want 6 vitals, got %d", len(h.Vitals))
 	}
 	if len(h.Pathologies) != 3 {
 		t.Errorf("want 3 pathologies, got %d", len(h.Pathologies))
@@ -94,8 +98,12 @@ func TestSnapshotHealth_RecordsToJournal(t *testing.T) {
 	if err := json.Unmarshal([]byte(entries[0].Data), &recorded); err != nil {
 		t.Fatalf("unmarshal health snapshot: %v", err)
 	}
-	if recorded.Status != got.Status || len(recorded.Vitals) != 5 {
-		t.Errorf("recorded snapshot = %+v, want status %q with 5 vitals", recorded, got.Status)
+	// Compare against what BrainHealth actually returned rather than a literal
+	// count: this test is about the JOURNAL faithfully recording the snapshot,
+	// and pinning a number here made adding a vital fail in a place that has
+	// nothing to do with the change.
+	if recorded.Status != got.Status || len(recorded.Vitals) != len(got.Vitals) {
+		t.Errorf("recorded snapshot = %+v, want status %q with %d vitals", recorded, got.Status, len(got.Vitals))
 	}
 }
 
