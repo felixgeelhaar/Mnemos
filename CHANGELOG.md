@@ -8,6 +8,92 @@ notable changes.
 
 ## [Unreleased]
 
+## [0.123.0] — 2026-08-02
+
+A release about the difference between a system that looks correct and one that
+is. Every fix below was a surface that reported success while the thing beneath
+it did nothing — and several were found only because a number refused to add up.
+
+### Added
+
+- **`trust_decay`, a measured vital** (#328). The share of currently-trusted
+  beliefs due to fall through `low_trust`'s own floor within 30 days unless
+  re-verified — a leading indicator to that vital's lagging one. Computed from
+  real data at each belief's own half-life, never estimated; `unknown` when no
+  belief is above the floor, because a green `0` for a fully-decayed brain is
+  exactly the failure #325 set out to remove.
+
+- **A sleep cycle for the hosted brain** (#329). `serve` ran indefinitely and
+  never consolidated: the local brain gets a daily pass from its session hook,
+  and `serve` got nothing, so narration and dissonance accumulated forever.
+  It now runs the *same* pass on a ticker (`--consolidate-interval`,
+  `MNEMOS_CONSOLIDATE_INTERVAL`, default 20 h; `0` disables), one target per
+  tenant under `--require-tenant`, never overlapping, and never taking the
+  server down on failure.
+
+- **brainbench — an A/B harness for whether the processes actually help**
+  (#330). `make brain-eval` seeds identical brains, runs the process set on one,
+  and diffs. Claim counts, mean trust and database size are reported but
+  deliberately **not scored**: forgetting mechanically shrinks a brain and raises
+  mean trust, so scoring them would report success for a pass that only deleted
+  knowledge. It does not gate CI, because gating creates pressure to weaken
+  scenarios until they stop reporting regressions.
+
+  First results, unflattering parts included: consolidation is a clear win on
+  superseded facts (forbidden-hit-rate 1.00 → 0.00, MRR 0.35 → 0.71, nothing
+  current lost), **mixed** on redundancy (dedupe works, but two ADR-0019 vitals
+  get *worse* because merging concentrates evidence past the hypercorrection
+  floor), and **inert** on narration.
+
+- **`mnemos recompute-half-life`** (#336) — backfills the value #334 started
+  persisting, for rows written before it. Dry-run reports the distribution before
+  anything changes; only fills rows currently `0`, so a `MarkVerified` override
+  is never clobbered.
+
+### Fixed
+
+- **`half_life_days` was computed on every claim and never stored** (#331, #334).
+  The volatility classifier stamped a per-claim half-life; the `INSERT` column
+  list omitted it, on every backend. On a real 88k-belief brain **every row was
+  `0`**, so every belief decayed at the 90-day default and the classifier had
+  never had an effect. Postgres and MySQL never *read* it either.
+
+  It survived because `MarkVerified` writes the column and every `SELECT` reads
+  it — the plumbing looked complete from every direction except ingest.
+
+- **`health --human` rendered `unknown` as `[ ok ]`** (#328). The #325 fix, which
+  made unmeasured vitals stop reporting a fabricated number, never reached the
+  view most people read. `low_trust` and `staleness` also graded `0/0` as
+  healthy, indistinguishable from a brain that had genuinely lost nothing.
+
+- **Hand-written backend projections had silently drifted** (#335, #340). A guard
+  now fails the build when a column is declared but unread, written but unread,
+  or present in an `ON CONFLICT` set but absent from the read projection — the
+  last being a read-modify-write that would silently zero it across thousands of
+  rows. It found three drifts beyond the two known, including **MySQL never
+  reading `lifecycle`**, so promoting a belief succeeded and every read reported
+  it uncurated. Two remaining are tracked in #338 and #339.
+
+- **The docs disagreed with the code about what forgetting does** (#332, #333).
+  Automatic forgetting closes valid-time and never touches `Status`; deprecation
+  is a separate mechanism used by deliberate acts. The wrong description sent an
+  ADR's gap analysis astray and caused a real measurement bug in the harness.
+  Root cause fixed rather than the symptom: the one accurate comment was
+  physically split in half by a `const`, so Go attached only its second half and
+  the correct description was unreadable where anyone would look.
+
+### Documentation
+
+- **ADR 0024 — graded retrievability** (#327). mnemos preserves history but has
+  no retrieval strength that fades while a trace persists; Bjork's storage-vs-
+  retrieval distinction is half-implemented. Design only.
+- **ADR 0025 — `half_life_days = 0` is two facts** (#337). "Classified durable"
+  and "never classified" store the same value, so a backfill can never be done
+  and coverage is unanswerable. Design only.
+- `CLAUDE.md` stopped presenting partial lists as complete (#326) — the MCP tool
+  list named 18 of ~53, and twelve packages including the whole cognitive layer
+  were absent.
+
 ## [0.122.0] — 2026-07-29
 
 ### Added
