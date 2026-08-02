@@ -74,6 +74,50 @@ it did nothing — and several were found only because a number refused to add u
   reading `lifecycle`**, so promoting a belief succeeded and every read reported
   it uncurated. Two remaining are tracked in #338 and #339.
 
+- **Postgres and MySQL never persisted scope, provenance or visibility** (#338,
+  #339, #345). The two remaining drifts above, fixed. `Claim.Scope` existed in
+  both backends' DDL but in neither write path, so **scoped queries against a
+  hosted brain returned nothing** — `Context.Matches` wildcards on the filter
+  side, so an empty stored scope fails every non-empty filter. Eight further
+  columns — the whole epistemic-provenance set plus `visibility` — were not
+  declared at all.
+
+  Visibility, stated precisely rather than alarmingly: an `org` belief reading as
+  `team` **is** admitted to team-tier queries that would otherwise exclude it.
+  It is not a privilege issue — the query's tier is caller-supplied, read
+  straight from `req.Visibility` and never derived from identity, so any caller
+  could already ask for `org`. Visibility is a scoping preference, not an
+  enforcement boundary.
+
+  **Found while fixing, in neither issue:** MySQL could not read its own upgraded
+  rows. `confidence_components` is `JSON NULL` with no default there and was
+  scanned into a plain `string`, so any row predating the ALTER failed with
+  `converting NULL to string is unsupported` — unreadable rather than degraded,
+  and it took the whole batch down.
+
+  **Why both shipped:** the cross-backend parity tests opt hosted backends in
+  from `TEST_*_DSN`, and `db-providers.yml` did not include `./internal/store/`
+  where they live. In CI they ran sqlite+memory only, so every assertion about a
+  hosted brain was vacuous. That path is now in the workflow, which is the part
+  that stops the next one.
+
+- **A partial write erased curation nothing could reconstruct** (#346). Generalises
+  #334 from `half_life_days` to all eleven scope / provenance / visibility columns
+  on every backend. No ingest path produces any of them, and the writers that can
+  hit an existing claim id — `POST /v1/beliefs`, gRPC `WriteBeliefs` — build a
+  belief from a request with no such field, so a blind `= excluded.x` silently
+  reverted a belief promoted to `personal` back to `team`, cleared `Scope` so
+  scoped queries stopped matching it, and cleared the execution record so
+  liveness read the belief as never run. An explicit value still always wins, so
+  nothing became uncorrectable.
+
+  SQLite needed two things the hosted backends did not: `visibility` bound **raw**
+  on write, because normalising to the default makes "unset" and "explicitly team"
+  the same string and the rule must tell them apart; and `<> ''` rather than
+  `IS NOT NULL` for `last_executed`, which this backend stores as a string. The
+  second was caught by the test, not by review — ten of eleven columns passed on
+  the first run.
+
 - **The docs disagreed with the code about what forgetting does** (#332, #333).
   Automatic forgetting closes valid-time and never touches `Status`; deprecation
   is a separate mechanism used by deliberate acts. The wrong description sent an
