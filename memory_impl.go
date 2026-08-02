@@ -2425,9 +2425,11 @@ func (m *memory) BrainHealth(ctx context.Context) (BrainHealth, error) {
 			fmt.Sprintf("expected calibration error over %d adjudicated belief(s)", cal.Samples)},
 		{"dissonance", dissonance, gradeHigherWorse(dissonance, healthDissonanceWarn, healthDissonanceCrit),
 			"active high-stakes contradictions per belief"},
-		{"low_trust", lowTrustRate, gradeHigherWorse(lowTrustRate, healthLowTrustWarn, healthLowTrustCrit),
+		// Both are fractions OF validCount, so gradeWithSamples: 0/0 is not a
+		// brain that has lost nothing, it is a brain nothing was measured on.
+		{"low_trust", lowTrustRate, gradeWithSamples(validCount, lowTrustRate, healthLowTrustWarn, healthLowTrustCrit),
 			fmt.Sprintf("%d/%d valid beliefs below trust %.2f", lowTrust, validCount, healthLowTrustFloor)},
-		{"staleness", stalenessRate, gradeHigherWorse(stalenessRate, healthStalenessWarn, healthStalenessCrit),
+		{"staleness", stalenessRate, gradeWithSamples(validCount, stalenessRate, healthStalenessWarn, healthStalenessCrit),
 			fmt.Sprintf("%d/%d valid beliefs unverified in %.0f days", stale, validCount, healthStalenessHorizonDays)},
 		trustDecayVital(trusted, decaying),
 		m.skillCoverageVital(ctx),
