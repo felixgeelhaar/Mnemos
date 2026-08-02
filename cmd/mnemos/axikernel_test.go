@@ -5,10 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"go.klarlabs.de/axi"
 	"go.klarlabs.de/axi/domain"
 	"go.klarlabs.de/bolt"
+	"go.klarlabs.de/mnemos/internal/kernel"
 )
 
 func TestBuildMCPKernel_RegistersAllMCPTools(t *testing.T) {
@@ -175,5 +177,64 @@ func TestProcessTextEvidence_SkipsLLMRecordWhenNoTokens(t *testing.T) {
 	}
 	if records[0].Kind != "mnemos.process_text" {
 		t.Errorf("records[0].Kind = %q, want mnemos.process_text", records[0].Kind)
+	}
+}
+
+// TestMCPExecutorMap_BindsEveryKernelAction pins the action↔executor binding.
+//
+// mcpTools() names the actions the kernel registers; mcpExecutorMap() names the
+// executors bound to them, keyed by kernel.ExecutorRef(name). Those two lists
+// drifted in #177 (the v0.85.0 brain-native rename): the ACTIONS became
+// list_beliefs / list_dissonances / remember_episode, the EXECUTOR KEYS kept the
+// old list_claims / list_contradictions / remember_event. Nothing failed at
+// build or at kernel-build time — the mismatch only surfaces at dispatch, as
+// "action executor not registered", which the MCP boundary sanitises into an
+// opaque `-32603 internal error`. So list_beliefs returned -32603
+// unconditionally, in every release since (#341).
+//
+// TestBuildMCPKernel_RegistersAllMCPTools does NOT cover this: registration
+// succeeds with an unbound executor. Both directions are checked here, because
+// an orphaned executor key is the other half of the same drift.
+func TestMCPExecutorMap_BindsEveryKernelAction(t *testing.T) {
+	execs := mcpExecutorMap("", func() (*Watcher, error) { return nil, nil })
+
+	bound := map[string]bool{}
+	for _, tool := range mcpTools() {
+		ref := kernel.ExecutorRef(tool.Name)
+		bound[ref] = true
+		if _, ok := execs[ref]; !ok {
+			t.Errorf("action %q has no executor bound at %q: every call to it fails with -32603", tool.Name, ref)
+		}
+	}
+	for ref := range execs {
+		if !bound[ref] {
+			t.Errorf("executor %q is bound to no registered action — a stale key means some tool is unreachable", ref)
+		}
+	}
+}
+
+// TestMCPKernelDispatch_ReachesTheRenamedTools is the end-to-end half: the
+// tools whose executor keys drifted must actually EXECUTE through the kernel,
+// not merely be registered. Run against an empty brain, so a successful (empty)
+// result is the pass condition.
+func TestMCPKernelDispatch_ReachesTheRenamedTools(t *testing.T) {
+	t.Setenv("MNEMOS_DB_URL", "sqlite://"+filepath.Join(t.TempDir(), "mnemos.db"))
+	logger := bolt.New(bolt.NewJSONHandler(os.Stderr))
+	k, err := buildMCPKernel(logger, mcpExecutorMap("", func() (*Watcher, error) { return nil, nil }))
+	if err != nil {
+		t.Fatalf("kernel: %v", err)
+	}
+	ctx := context.Background()
+
+	if _, err := dispatchAxiTool[mcpListClaimsOutput](ctx, k, nil, "list_beliefs", mcpListClaimsInput{}); err != nil {
+		t.Errorf("list_beliefs through the kernel: %v", err)
+	}
+	if _, err := dispatchAxiTool[mcpListContradictionsOutput](ctx, k, nil, "list_dissonances", mcpListContradictionsInput{}); err != nil {
+		t.Errorf("list_dissonances through the kernel: %v", err)
+	}
+	if _, err := dispatchAxiTool[mcpRememberEventOutput](ctx, k, nil, "remember_episode", mcpRememberEventInput{
+		Content: "deployed v1", At: time.Now().UTC().Format(time.RFC3339), RunID: "run-341",
+	}); err != nil {
+		t.Errorf("remember_episode through the kernel: %v", err)
 	}
 }

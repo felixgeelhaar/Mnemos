@@ -114,14 +114,20 @@ func mcpExecutorMap(actor string, getWatcher func() (*Watcher, error)) map[strin
 			return mcpRunProcessText(ctx, mcpActorFor(ctx, actor), in)
 		}, summary: processTextSummary, evidence: processTextEvidence},
 		"exec.knowledge_metrics": toolExecutor[struct{}, mcpMetricsOutput]{run: func(ctx context.Context, _ struct{}) (mcpMetricsOutput, error) { return mcpRunMetrics(ctx) }, summary: metricsSummary},
-		"exec.list_claims": toolExecutor[mcpListClaimsInput, mcpListClaimsOutput]{run: func(ctx context.Context, in mcpListClaimsInput) (mcpListClaimsOutput, error) {
+		// The keys below MUST equal kernel.ExecutorRef(<action name in
+		// mcpTools()>). They are matched by string at dispatch time, so a rename
+		// on one side and not the other builds cleanly, registers cleanly, and
+		// then fails every call with "action executor not registered" — which the
+		// MCP boundary sanitises into an opaque -32603 (#341). Guarded by
+		// TestMCPExecutorMap_BindsEveryKernelAction.
+		"exec.list_beliefs": toolExecutor[mcpListClaimsInput, mcpListClaimsOutput]{run: func(ctx context.Context, in mcpListClaimsInput) (mcpListClaimsOutput, error) {
 			return mcpRunListClaims(ctx, in)
 		}, summary: listClaimsSummary},
 		"exec.list_decisions": toolExecutor[mcpListClaimsInput, mcpListClaimsOutput]{run: func(ctx context.Context, in mcpListClaimsInput) (mcpListClaimsOutput, error) {
 			in.Type = "decision"
 			return mcpRunListClaims(ctx, in)
 		}, summary: listClaimsSummary},
-		"exec.list_contradictions": toolExecutor[mcpListContradictionsInput, mcpListContradictionsOutput]{run: func(ctx context.Context, in mcpListContradictionsInput) (mcpListContradictionsOutput, error) {
+		"exec.list_dissonances": toolExecutor[mcpListContradictionsInput, mcpListContradictionsOutput]{run: func(ctx context.Context, in mcpListContradictionsInput) (mcpListContradictionsOutput, error) {
 			return mcpRunListContradictions(ctx, in)
 		}, summary: listContradictionsSummary},
 		"exec.ingest_git_log": toolExecutor[mcpIngestGitLogInput, mcpIngestGitLogOutput]{run: func(ctx context.Context, in mcpIngestGitLogInput) (mcpIngestGitLogOutput, error) {
@@ -133,7 +139,7 @@ func mcpExecutorMap(actor string, getWatcher func() (*Watcher, error)) map[strin
 		"exec.watch_file": toolExecutor[mcpWatchFileInput, mcpWatchFileOutput]{run: func(_ context.Context, in mcpWatchFileInput) (mcpWatchFileOutput, error) {
 			return runWatchFileTool(in, getWatcher)
 		}, summary: watchFileSummary},
-		"exec.remember_event": toolExecutor[mcpRememberEventInput, mcpRememberEventOutput]{run: func(ctx context.Context, in mcpRememberEventInput) (mcpRememberEventOutput, error) {
+		"exec.remember_episode": toolExecutor[mcpRememberEventInput, mcpRememberEventOutput]{run: func(ctx context.Context, in mcpRememberEventInput) (mcpRememberEventOutput, error) {
 			return mcpRunRememberEvent(ctx, mcpActorFor(ctx, actor), in)
 		}, summary: rememberEventSummary},
 		"exec.timeline_query": toolExecutor[mcpTimelineQueryInput, mcpTimelineQueryOutput]{run: func(ctx context.Context, in mcpTimelineQueryInput) (mcpTimelineQueryOutput, error) {
