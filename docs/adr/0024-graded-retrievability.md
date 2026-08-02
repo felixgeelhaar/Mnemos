@@ -8,8 +8,12 @@
   started in ADR 0015 §6 and continued in ADR 0016 (competitive inhibition), and gives
   the phrase "forgetting is reduced retrievability, not erasure" — asserted in five
   places in the codebase — an implementation. Touches `internal/query` ranking, the
-  domain belief type, and the consolidation pass. Does **not** touch `internal/trust`
-  and does **not** change the store schema.
+  domain belief type, and the consolidation pass's *automatic* forgetting sweep. Does
+  **not** touch `internal/trust`, the deliberate deprecation paths (`forget`,
+  `memory_deprecate`, `prune`, resolution losers), or the store schema.
+- **Also records a documentation defect** found while verifying the mechanism: two
+  comments describe automatic forgetting as setting `Status = deprecated` when it closes
+  valid-time. Not fixed here (this change is design-only); see Context and Rollout step 0.
 
 ## Context
 
@@ -24,32 +28,102 @@ rather than erasing history:
 - `cmd/mnemos/prune_session_local.go:38` — "Deprecation is reduced retrievability, never
   erasure"
 
-Half of that is true and load-bearing. Nothing is deleted: `forgetStaleClaims`
-(`memory_impl.go:1811`) closes valid-time with `SetValidity(ctx, c.ID, now)`
-(`memory_impl.go:1854`); `prune --narration` and `memory_deprecate` set
-`ClaimStatusDeprecated`; `claim_status_history` and `claim_versions` retain the
-transitions; point-in-time recall (`--at`, `--include-history`) still reaches the
+Half of that is true and load-bearing. Nothing is deleted, `claim_status_history` and
+`claim_versions` retain the transitions, and point-in-time recall still reaches the
 retired belief. Storage is preserved. That part works.
 
-The other half is not implemented. **There is no retrievability score.** Accessibility
-in mnemos is a two-valued property derived from two independent binaries:
+### Two different retirement mechanisms, not one
 
-1. **Status** — `ClaimStatus` has exactly four values (`internal/domain/types.go:105-110`:
-   `active`, `contested`, `resolved`, `deprecated`), and admission drops exactly one of
-   them: `out := excludeDeprecated(claims)` (`internal/query/admission.go:91`, filter at
-   `internal/query/contextblock.go:208-216`). Deprecated is invisible to recall; the
-   other three are fully visible. There is nothing between.
-2. **Valid time** — `admitClaims` keeps a belief only if `c.IsValidAt(asOf)`
-   (`internal/query/admission.go:180`; predicate at `internal/domain/types.go:407-415`),
-   a boolean over `valid_from`/`valid_to`. `forgetStaleClaims` writes `valid_to = now`,
-   so a forgotten belief goes from **fully recallable** to **completely unrecallable**
-   in one write, on the strength of a single threshold comparison
-   (`c.TrustScore >= belowTrust`, `memory_impl.go:1836`).
+Getting the rest of this ADR right requires being precise about *how* a belief stops
+being recalled, because there are **two independent mechanisms** and they are easy to
+conflate (see the defect below — the codebase conflates them in its own comments).
+
+**Mechanism A — valid-time closure. `Status` is never touched.** This is what
+*automatic* forgetting does.
+
+- `forgetStaleClaims` (`memory_impl.go:1811-1860`) — the `consolidate
+  --forget-below-trust` sweep — ends in `SetValidity(ctx, c.ID, now)`
+  (`memory_impl.go:1854`). The function body contains **no reference to `Status` at
+  all**; its skip condition is `if !c.ValidTo.IsZero() { continue }` with the comment
+  "already invalidated (superseded or previously forgotten)" (`:1830-1831`).
+- `forgetRefutedClaims` does the same (`memory_impl.go:1786`), and its own comment says
+  so: "Like forgetStaleClaims it closes valid-time" (`memory_impl.go:1759`).
+- `resolve --supersedes` (`cmd/mnemos/resolve.go:206`) and a `remember` carrying an
+  explicit TTL (`cmd/mnemos/mcp.go:2119`) also close valid-time.
+
+**Mechanism B — `Status → deprecated`. Valid-time is never touched.** This is what
+*deliberate* retirement does — every one of these paths is a human or agent explicitly
+saying "retire this":
+
+- MCP `forget` (`cmd/mnemos/mcp.go:2151`) and `memory_deprecate`
+  (`cmd/mnemos/mcp.go:1880`).
+- Contradiction-resolution losers: MCP `memory_resolve_dissonance`
+  (`cmd/mnemos/mcp.go:1921`) and CLI `resolve` (`cmd/mnemos/resolve.go:144`).
+- `prune --narration` (`cmd/mnemos/prune_narration.go:88`) and `prune --session-local`
+  (`cmd/mnemos/prune_session_local.go:104`).
+- Duplicate tombstones (`internal/pipeline/semantic_dedupe.go:352`,
+  `internal/govwrite/lifecycle.go:223`).
+
+The two axes are fully orthogonal: a belief swept by consolidation keeps
+`Status = active`, and a deprecated belief still has open valid-time (so the sweep can
+close it later, independently).
+
+### The gap
+
+**There is no retrievability score.** Accessibility is a two-valued property produced by
+two independent binaries, one per mechanism — and, importantly, they are **not equally
+hard**:
+
+1. **Valid time (Mechanism A).** `admitClaims` keeps a belief only if
+   `c.IsValidAt(asOf)` (`internal/query/admission.go:180`; predicate at
+   `internal/domain/types.go:407-415`), a boolean over `valid_from`/`valid_to`. This
+   filter is **conditional** — it sits behind `if !opts.IncludeHistory`, so
+   `--include-history` and `--at` bypass it. Automatic forgetting is therefore the
+   *softer* retirement: recoverable at read time by a caller who asks for history.
+2. **Status (Mechanism B).** `ClaimStatus` has exactly four values
+   (`internal/domain/types.go:105-110`) and admission drops exactly one:
+   `out := excludeDeprecated(claims)` (`internal/query/admission.go:91`, filter at
+   `internal/query/contextblock.go:208-216`). This filter is **unconditional** — no
+   query option bypasses it. Deliberate deprecation is the *harder* retirement.
+
+Either way the transition is a step function. `forgetStaleClaims` takes a belief from
+**fully recallable** to **excluded** in one write, on the strength of a single threshold
+comparison (`c.TrustScore >= belowTrust`, `memory_impl.go:1836`). Valid time is an
+*interval*, not a flag — but recall reads it as a predicate, so what the retrieval path
+actually sees is a step: full accessibility until `valid_to`, then none.
 
 So a belief in mnemos is either current or retired. Nothing becomes gradually *harder*
 to recall while remaining recallable. The intermediate state a brain spends most of its
 time in — the memory that is still there, still true, still cited, but takes a stronger
 cue to reach — has no representation.
+
+### A defect this ADR discovered (not fixed here — this is a design-only change)
+
+Two comments describe Mechanism A as if it were Mechanism B, and they are the two
+comments a reader is most likely to meet first:
+
+- `memory.go:643-645` — `ConsolidateOptions.ForgetBelowTrust`: "Forgetting is reduced
+  retrievability, NOT erasure: **the claim is marked deprecated** (excluded from recall)
+  with its history preserved." It is not marked deprecated; `SetValidity` closes
+  valid-time. The **adjacent** `ForgetRefuted` field (`memory.go:652-654`) documents the
+  identical call shape *correctly* — "it invalidates (valid-time closed, history kept)"
+  — so two neighbouring fields describe the same mechanism two different ways, and one
+  is wrong.
+- `memory_impl.go:1064-1067` — the `Consolidate` call site: "Reduced retrievability, not
+  erasure (**marked deprecated**, history preserved)."
+
+A likely contributing cause, worth fixing at the same time: the one comment that gets it
+right — `forgetStaleClaims`'s own doc comment, "by setting their valid-to to now" — is
+physically **interleaved** with the `salienceProtectFloor` const declaration
+(`memory_impl.go:1794-1810`). The sentence breaks mid-parenthesis at "…the claim + its
+history are preserved (a", the const and its comment intrude, and it resumes at "//
+point-in-time query can still see what was once believed)". The accurate description is
+split across an unrelated declaration and is effectively unreadable in place.
+
+This is not cosmetic. The evaluation-harness lane hit it as a **real measurement bug**:
+its first census counted `Status` only, so a consolidation pass reporting `forgotten: 4`
+showed zero movement anywhere. Any tooling that trusts those comments will measure the
+wrong column.
 
 ### Why this matters more than it sounds
 
@@ -191,9 +265,10 @@ Sleep-driven rather than clock-driven decay is a real choice with a real cost, t
 three reasons: it needs no timestamp and therefore no schema change; it makes the
 mechanism a deterministic, reproducible function of the pass sequence (journalable, and
 re-runnable offline against ADR 0018's record); and mnemos already models synaptic
-renormalisation as something that happens during `consolidate` (`memory_impl.go:1064-1067`),
-consistent with the sleep-homeostasis account. The cost is documented under Risks and the
-wall-clock alternative under Rejected.
+renormalisation as something that happens during `consolidate` (`memory_impl.go:1064-1067`
+— the framing is right even though that comment's "marked deprecated" parenthetical is
+the defect noted above), consistent with the sleep-homeostasis account. The cost is
+documented under Risks and the wall-clock alternative under Rejected.
 
 ### 3. What renews it — the testing effect, difficulty-weighted
 
@@ -250,21 +325,40 @@ Always applied, like inhibition and unlike salience — a persisted accessibilit
 must keep biasing later recalls whether or not those recalls opt into writing — and inert
 when the component is absent. The flag gates writing, not reading.
 
-### 5. How it changes the retire gate — narrowing it, not widening it
+### 5. How it changes the retire gate — Mechanism A only, and narrowing it
 
-Today `forgetStaleClaims` retires on trust alone (`memory_impl.go:1836`). That is the
-storage/retrieval conflation in its most consequential form. Under this ADR the gate
-becomes a **conjunction**: a belief is retired only when its trust is below the floor
-**and** its retrieval strength is at the cold end — poorly evidenced *and* unused.
+Today `forgetStaleClaims` closes valid-time on trust alone (`memory_impl.go:1836`). That
+is the storage/retrieval conflation in its most consequential form: a belief loses
+recallability for being *poorly evidenced*, which is a statement about its grounding, not
+about its accessibility. Under this ADR the gate becomes a **conjunction** — valid-time is
+closed only when trust is below the floor **and** retrieval strength is at the cold end:
+poorly evidenced *and* unused.
 
-This deliberately makes the gate strictly **narrower**. Retrievability is never given the
-power to retire anything on its own; it is only ever given the power to spare something.
-A warm-but-untrusted belief is kept, joining the three protections already in place and
-checked before it: promoted lifecycle (`memory_impl.go:1833`), intrinsic salience
-(`memory_impl.go:1844`), and same-pass replay protection (`memory_impl.go:1850`). The new
-protection is distinct from all three: salience is intrinsic stakes and by design does
-not decay; replay protection lasts one pass; lifecycle is human curation. Retrieval
-strength is *observed usage across passes*, which none of them measure.
+Concretely, this is one more `continue` before the `SetValidity` call at
+`memory_impl.go:1854`. It guards **valid-time closure**, not a status change, and it
+applies **only to Mechanism A** — `forgetStaleClaims`, and by the same argument
+`forgetRefutedClaims` (`memory_impl.go:1786`), both of which are automatic sweeps run by
+`consolidate` against a threshold.
+
+**It must never touch Mechanism B, and that is a deliberate guardrail, not an omission.**
+Every deprecation path is a human or an agent explicitly instructing the system to retire
+a belief: MCP `forget` and `memory_deprecate`, a resolved contradiction's loser, `prune
+--narration`. A usage statistic has no business second-guessing an explicit instruction —
+"but people still look this up" is not a valid objection to "forget this". Retrievability
+softens *automatic, inferred* forgetting; it has no vote on *deliberate* forgetting. This
+also keeps the mechanism away from the unconditional `excludeDeprecated` filter, where a
+mistake would be unrecoverable at read time (Mechanism A's exclusion is at least
+bypassable with `--include-history`).
+
+Within Mechanism A the change makes the gate strictly **narrower**. Retrievability is
+never given the power to retire anything on its own; it is only ever given the power to
+spare something. A warm-but-untrusted belief is kept, joining the three protections
+already in place and checked before it: promoted lifecycle (`memory_impl.go:1833`),
+intrinsic salience (`memory_impl.go:1844`), and same-pass replay protection
+(`memory_impl.go:1850`). The new protection is distinct from all three: salience is
+intrinsic stakes and by design does not decay; replay protection lasts one pass; lifecycle
+is human curation. Retrieval strength is *observed usage across passes*, which none of
+them measure.
 
 ### 6. How it composes with what exists
 
@@ -299,8 +393,21 @@ Three surfaces, all cheap because the substrate exists:
 And the one that is genuinely new work: **`mnemos why-not-recalled <question>
 <claim-id>`**. It replays the admission chain (`internal/query/admission.go:80`) and the
 ranking terms for one belief against one question and reports either the gate that
-dropped it (deprecated / out of valid time / below `MinTrust` / scope / visibility /
-durability) or its score decomposition and the deltas that cost it its position.
+dropped it or its score decomposition and the deltas that cost it its position.
+
+The gate report must **name the two retirement mechanisms separately**, because they have
+different causes and different remedies — conflating them in the explain surface would
+reproduce the exact confusion documented above:
+
+- *"deprecated"* — Mechanism B, a deliberate act. The report should name the actor and
+  reason from `claim_status_history`. There is no read-time bypass; the remedy is to
+  un-deprecate.
+- *"valid-time closed"* — Mechanism A, and worth distinguishing *why*: superseded by a
+  newer belief (`resolve --supersedes`), swept by `--forget-below-trust`, or refuted. The
+  remedy is different and much cheaper: re-run with `--include-history` or `--at`.
+
+Plus the ordinary filters (`MinTrust`, scope, visibility, lifecycle, durability) and,
+when nothing excluded it, the ranking decomposition.
 
 This is more work than the mechanism itself, and it is **deliberately in scope for the
 same change**. ADR 0016 shipped a persisted, always-applied, invisible ranking penalty
@@ -338,8 +445,13 @@ machine's citation trail. Building it here pays down 0016's debt too.
   `ApplyBeliefCredit(ctx, id, merged, c.TrustScore)` — the write cannot move trust.
 - **`admitClaims`.** No new filter, no new gate, no new reason for a belief to be
   excluded from an answer. Retrievability is ranking-only.
-- **`ClaimStatus`**, `valid_from`/`valid_to` semantics, `excludeDeprecated`, the REST /
-  gRPC / MCP wire, and `claim_status_history`.
+- **`ClaimStatus`** and every Mechanism-B path — `forget`, `memory_deprecate`,
+  contradiction-resolution losers, `prune --narration`, the dedupe tombstones — plus
+  `excludeDeprecated`, `claim_status_history`, and the REST / gRPC / MCP wire. Deliberate
+  retirement is untouched by design (§5).
+- **`valid_from`/`valid_to` semantics.** The columns, the `IsValidAt` predicate and the
+  `--include-history` / `--at` bypass all keep their current meaning; the only change is
+  one additional condition guarding when consolidation *writes* a `valid_to`.
 - **Salience, inhibition, Hebbian strength, plasticity, credit.** All additive and
   independent; the `retrieval` key is a non-`credit:` component so the credit pass
   preserves it and `RecomputeTrust` ignores it.
@@ -354,8 +466,8 @@ never call `rankClaimsByHybrid` at all — they are unaffected by construction. 
 question that names the belief, cosine and BM25 both approach the normalisation maximum,
 where a ±0.05 delta cannot displace it. The term is sized to reorder near-ties, exactly
 as salience's is (`internal/query/salience.go:18-24`). This is the categorical difference
-from the existing binary: `deprecated` and `valid_to` remove a belief from recall; this
-never can.
+from both existing mechanisms: a `deprecated` status or a closed `valid_to` *removes* a
+belief from recall; a retrieval-strength value can only *reorder* one.
 
 **What stops useful-but-rare knowledge decaying into unreachability?**
 Four independent guards, any one of which suffices. (1) Decay targets **neutral**, not
@@ -423,6 +535,12 @@ to it, on exactly the argument `ClaimLifecycle` is documented with at
 and `excludeDeprecated` to learn a new value — a released-contract change (ADR 0011 §5)
 — to express a continuous quantity that does not want to be an enum.
 
+The two-mechanism picture makes this worse still: automatic forgetting is Mechanism A and
+**never reads or writes `Status` at all** (`forgetStaleClaims` contains no reference to
+it). Putting a disuse signal on `ClaimStatus` would site the graded axis on precisely the
+column the disuse-driven sweep does not use, and would then need a second rule to
+reconcile `dormant` with an independently-closed `valid_to`.
+
 **D. Make the term multiplicative, or add a hard cutoff below a threshold.**
 Rejected, and this is the most important rejection. Any multiplicative or gating form
 gives retrieval strength the power to *remove* a belief from an answer, which reinstates
@@ -485,10 +603,17 @@ never. It covers one quadrant of one axis.
   journal the truncation; the self-clearing floor keeps the population from growing without
   limit.
 - **A slower-shrinking brain.** Narrowing the retire gate to a conjunction means fewer
-  beliefs are retired per pass. An operator relying on `--forget-below-trust` to control
+  valid-time closures per pass. An operator relying on `--forget-below-trust` to control
   growth will see it control less. That is the intended semantics — "poorly evidenced" was
   never a good reason to make something unreachable — but it must be announced, and the
-  old behaviour must remain available by simply not enabling the flag.
+  old behaviour must remain available by simply not enabling the flag. Note this affects
+  only Mechanism A; the deliberate deprecation paths retire exactly as many beliefs as
+  before.
+- **One more thing to get wrong about which column moves.** This ADR adds a third
+  accessibility-adjacent quantity to a codebase whose own comments already disagree about
+  the two it has (see the defect in Context). Any tooling, census or eval harness reading
+  "was this forgotten?" must now check `Status`, `valid_to` **and** the `retrieval`
+  component. The defect should be fixed before this ships, not after.
 - **Constants are guesses.** `retain`, `δ`, `R_max`, the cold threshold and the weight are
   all stated as design intent. None should be treated as tuned until the journal has run
   on a real brain, exactly as ADR 0018 argued for the mechanisms that preceded this one.
@@ -518,6 +643,13 @@ never. It covers one quadrant of one axis.
 
 Sequenced so each step is independently valuable and reversible.
 
+0. **Fix the documentation defect first** (a separate, tiny PR; **not** part of this
+   design-only change). Correct `memory.go:643-645` and `memory_impl.go:1064-1067` to say
+   valid-time closure rather than "marked deprecated", and un-interleave the
+   `forgetStaleClaims` doc comment from the `salienceProtectFloor` const at
+   `memory_impl.go:1794-1810`. It is a prerequisite, not housekeeping: the next several
+   steps all reason about which column moves, and the comments currently say the wrong
+   one. It has already cost the evaluation-harness lane a wrong census.
 1. **Domain + read term, inert.** `retrievability.go` in `domain` and `query`, plus the
    term in `rankClaimsByHybrid`. Nothing writes the component yet, so recall is provably
    unchanged; the test asserting that is the gate.
