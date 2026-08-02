@@ -254,6 +254,8 @@ func main() {
 			return
 		}
 		recomputeContested(flags.DryRun, flags)
+	case "recompute-half-life":
+		handleRecomputeHalfLife(args, flags)
 	case "dedup":
 		handleDedupe(args, flags)
 	case "prune":
@@ -1517,6 +1519,8 @@ func printUsage() {
 	fmt.Println("  reembed [--force] [--dry-run]        (Re)generate claim + event embeddings under the current embed config")
 	fmt.Println("  recompute-trust [--all]              Rebuild trust_score for every claim under the current policy")
 	fmt.Println("  recompute-contested [--dry-run]      Clear contested status the current heuristic no longer assigns")
+	fmt.Println("  recompute-half-life [--dry-run]      Backfill the per-claim freshness half-life on rows that have none")
+	fmt.Println("    [--batch N]                        (every row predating the #331 fix); never overwrites a value already set")
 	fmt.Println("  dedup [--threshold T] [--force]      Merge near-duplicate claims by embedding similarity (dry-run by default)")
 	fmt.Println("  prune --narration [--dry-run]        Deprecate stored conversational pollution the extraction filter now catches")
 	fmt.Println("  prune --session-noise [--dry-run]    Drop contradiction edges where an LLM judges both claims session-local (edges only)")
