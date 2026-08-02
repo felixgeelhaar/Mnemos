@@ -47,10 +47,6 @@ func sqliteClaimColumns(t *testing.T) []string {
 // unreadColumns are declared on the Postgres claims table and deliberately
 // absent from claimColumnNames.
 var unreadColumns = map[string]string{
-	"scope_service": "Claim.Scope is neither written nor read by this backend — #338. " +
-		"Reading it without also writing it would only ever return the column default.",
-	"scope_env":  "Same as scope_service — #338.",
-	"scope_team": "Same as scope_service — #338.",
 	"search_tsv": "GENERATED ALWAYS AS (to_tsvector('english', text)) STORED — a derived " +
 		"full-text accelerator with no domain field. Postgres rejects writes to it, and " +
 		"reading it would only duplicate `text` in every row.",
@@ -69,16 +65,11 @@ var unwrittenColumns = map[string]string{
 
 // undeclaredColumns exist on the SQLite claims table and not in the Postgres
 // schema at all. Each one is a value a brain hosted here cannot persist.
-var undeclaredColumns = map[string]string{
-	"source_document":      "Epistemic-provenance column never added to this backend — #339.",
-	"source_type":          "Epistemic-provenance column never added to this backend — #339.",
-	"source_authority":     "Epistemic-provenance column never added to this backend — #339.",
-	"liveness":             "Epistemic-provenance column never added to this backend — #339.",
-	"last_executed":        "Epistemic-provenance column never added to this backend — #339. Feeds trust.EffectiveExecutionTime.",
-	"citation_count":       "Epistemic-provenance column never added to this backend — #339. Feeds the credibility corroboration signal.",
-	"provenance_rationale": "Epistemic-provenance column never added to this backend — #339.",
-	"visibility":           "Audience gate never added to this backend — #339. query.admission treats the missing value as 'team'.",
-}
+//
+// Empty since #338/#339 closed: every SQLite claims column is now declared
+// here. The map stays as the documented place to record a deliberate
+// divergence — with a reason, which an empty string is not.
+var undeclaredColumns = map[string]string{}
 
 // Every column this backend declares must be in the read projection.
 //

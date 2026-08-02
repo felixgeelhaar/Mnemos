@@ -100,6 +100,32 @@ ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_last_modified   DATETIME(6)  NU
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_last_run_at     DATETIME(6)  NULL;
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_pass_count      INT          NOT NULL DEFAULT 0;
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_fail_count      INT          NOT NULL DEFAULT 0;
+-- Epistemic provenance + the audience gate (#339). These eight existed only in
+-- sql/sqlite/schema.sql, so no projection change could have reached them —
+-- there was nothing to select, and a brain hosted here could not persist them
+-- at all. Existing rows read as the defaults below, which are the truthful
+-- values: unknown provenance IS empty/zero, and 'team' is exactly what
+-- query.admission already coerces an absent audience to, so no row changes
+-- meaning by acquiring the column.
+--
+-- source_document and provenance_rationale are VARCHAR(1024) rather than TEXT
+-- because MySQL forbids a DEFAULT on a TEXT column, and a NOT NULL column with
+-- no default makes every pre-existing row depend on an implicit fill. 1024 is
+-- generous for a path/URL and a one-line rationale; strict mode ERRORS rather
+-- than truncating, so an overflow is loud, not silent.
+--
+-- last_executed is NULLable with no default, deliberately: NULL is the
+-- cross-backend "never executed" sentinel that trust.EvaluateLiveness reads as
+-- "unknown, fall back to LastVerified/ValidFrom". A zero-instant default would
+-- report every unexecuted claim as decades dead.
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS source_document      VARCHAR(1024) NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS source_type          VARCHAR(64)   NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS source_authority     DOUBLE        NOT NULL DEFAULT 0;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS liveness             VARCHAR(32)   NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_executed        DATETIME(6)   NULL;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS citation_count       INT           NOT NULL DEFAULT 0;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS provenance_rationale VARCHAR(1024) NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS visibility           VARCHAR(32)   NOT NULL DEFAULT 'team';
 -- ListByTestRequirementRef filters `type = 'test_result' AND
 -- test_requirement_ref = ?`. MySQL has no partial indexes, so this is a plain
 -- composite; without it the lookup scans every claim row. CREATE INDEX has no

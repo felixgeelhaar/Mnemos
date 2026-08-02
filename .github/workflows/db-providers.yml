@@ -73,11 +73,19 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # ./internal/store/ is in this list because that is where the
+      # CROSS-BACKEND parity tests live (claim_projection_parity_test.go,
+      # claim_verification_parity_test.go, trust_sentinel_test.go). They are the
+      # only tests that assert Postgres and MySQL agree with SQLite about what a
+      # claim is, and they opt each hosted backend in from TEST_*_DSN — so
+      # without this path they ran in CI with sqlite+memory ONLY, and every
+      # assertion about a hosted brain was vacuous. #338 and #339 both shipped
+      # under exactly that blind spot.
       - name: Run Postgres + MySQL integration tests
         env:
           TEST_POSTGRES_DSN: postgres://mnemos:mnemos@127.0.0.1:5432/mnemos?sslmode=disable
           TEST_MYSQL_DSN: mysql://root:mnemos@127.0.0.1:3306/
-        run: go test -race -count=1 ./internal/store/postgres/ ./internal/store/mysql/ ./internal/server/grpc/
+        run: go test -race -count=1 ./internal/store/ ./internal/store/postgres/ ./internal/store/mysql/ ./internal/server/grpc/
 
       # ADR 0007 tenant isolation is enforced by Postgres RLS, which superusers
       # bypass — the default `mnemos` role above is a superuser, so the

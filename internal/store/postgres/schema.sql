@@ -84,6 +84,27 @@ ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_last_modified    timestamptz;
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_last_run_at      timestamptz;
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_pass_count       integer     NOT NULL DEFAULT 0;
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS test_fail_count       integer     NOT NULL DEFAULT 0;
+-- Epistemic provenance + the audience gate (#339). These eight existed only in
+-- sql/sqlite/schema.sql, so no projection change could have reached them —
+-- there was nothing to select, and a brain hosted here could not persist them
+-- at all. Existing rows read as the defaults below, which are the truthful
+-- values: unknown provenance IS empty/zero, and 'team' is exactly what
+-- query.admission already coerces an absent audience to, so no row changes
+-- meaning by acquiring the column.
+--
+-- last_executed is NULLable with no default, deliberately: NULL is the
+-- cross-backend "never executed" sentinel that trust.EvaluateLiveness reads as
+-- "unknown, fall back to LastVerified/ValidFrom". A zero-instant default would
+-- report every unexecuted claim as decades dead — the same mistake Postgres
+-- once made COALESCE-ing the evidence timestamp to 'epoch'.
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS source_document       text             NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS source_type           text             NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS source_authority      double precision NOT NULL DEFAULT 0;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS liveness              text             NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_executed         timestamptz;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS citation_count        integer          NOT NULL DEFAULT 0;
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS provenance_rationale  text             NOT NULL DEFAULT '';
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS visibility            text             NOT NULL DEFAULT 'team';
 CREATE INDEX IF NOT EXISTS idx_claims_scope_service ON claims(scope_service);
 CREATE INDEX IF NOT EXISTS idx_claims_lifecycle ON claims(lifecycle);
 -- ListByTestRequirementRef filters `type = 'test_result' AND
