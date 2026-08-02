@@ -85,6 +85,12 @@ type Config struct {
 		// happened to start with. Secure by default when unset.
 		PublicReads   scalar `yaml:"public_reads"`
 		MetricsPublic scalar `yaml:"metrics_public"`
+		// ConsolidateInterval is the hosted brain's sleep cadence: how often a
+		// running server consolidates (dedupe, trust refresh, credit, the skill
+		// loop, session-noise clearing). Defaults to the same ~daily gap the
+		// local brain sleeps on; 0 disables the cycle — set that on every
+		// replica but one, since the cycle is per process.
+		ConsolidateInterval scalar `yaml:"consolidate_interval"`
 	} `yaml:"serve"`
 
 	// Server points a CLIENT (e.g. the recall/brief/capture hooks) at a remote
@@ -253,6 +259,7 @@ func (c *Config) EnvOverrides() map[string]string {
 		{"MNEMOS_MTLS_CLIENT_CA_FILE", c.Serve.MTLSClientCAFile},
 		{"MNEMOS_PUBLIC_READS", c.Serve.PublicReads},
 		{"MNEMOS_METRICS_PUBLIC", c.Serve.MetricsPublic},
+		{"MNEMOS_CONSOLIDATE_INTERVAL", c.Serve.ConsolidateInterval},
 
 		{"MNEMOS_URL", c.Server.URL},
 		{"MNEMOS_TOKEN", c.Server.Token},

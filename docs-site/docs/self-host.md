@@ -50,6 +50,26 @@ The signing key comes from `MNEMOS_JWT_SECRET` (hex, ≥ 32 bytes) or
 explicitly in production and plan a rotation cadence
 (`MNEMOS_JWT_PREV_SECRET` bridges the rollover).
 
+## Consolidation (the server's sleep cycle)
+
+A running server consolidates on its own clock — the hosted counterpart of the
+local brain's session-start sleep. One pass runs a couple of minutes after boot,
+then every `MNEMOS_CONSOLIDATE_INTERVAL` (`serve --consolidate-interval`, or
+`serve.consolidate_interval` in `mnemos.yaml`; default `20h`, `0` disables).
+
+It runs the same organs the local brain does — dedupe, trust refresh, credit
+assignment, the lesson/playbook skill loop, decay, the cognitive journal, and,
+when an LLM is configured, the session-noise clearing that keeps dissonance from
+climbing one way forever.
+
+- Under `--require-tenant`, every tenant partition is consolidated separately
+  under its own scope. A backend that cannot enumerate its tenants gets no pass
+  at all, and says so — it never falls back to an unscoped store.
+- Failures are logged and the server keeps serving; a tick that arrives while a
+  pass is still running is skipped.
+- The cycle is per process. Running several replicas against one store means
+  several concurrent passes, so set the interval to `0` on all but one.
+
 ## Compose templates
 
 Production-shape compose files live under [`deploy/`](https://github.com/klarlabs-studio/mnemos/tree/main/deploy):

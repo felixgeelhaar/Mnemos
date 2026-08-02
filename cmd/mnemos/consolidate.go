@@ -35,20 +35,7 @@ func handleConsolidate(args []string, f Flags) {
 		}
 	}
 
-	// --clear-session-noise extends the sleep pass with the LLM narration-clearing
-	// that keeps dissonance from ratcheting up (the deterministic organs alone do
-	// not touch it). Stripped before parseConsolidateOpts, which rejects unknown
-	// flags, because it is a command-level step, not a library ConsolidateOption.
-	clearSessionNoise := false
-	kept := make([]string, 0, len(args))
-	for _, a := range args {
-		if a == "--clear-session-noise" {
-			clearSessionNoise = true
-			continue
-		}
-		kept = append(kept, a)
-	}
-	args = kept
+	args, clearSessionNoise := splitSessionNoiseFlag(args)
 
 	opts, err := parseConsolidateOpts(args, f)
 	if err != nil {
@@ -103,6 +90,30 @@ func handleConsolidate(args []string, f Flags) {
 		}
 		pruneSessionNoise(f.DryRun, f)
 	}
+}
+
+// splitSessionNoiseFlag strips --clear-session-noise from a consolidate
+// argument list and reports whether it was present.
+//
+// The flag extends the sleep pass with the LLM narration-clearing that keeps
+// dissonance from ratcheting up (the deterministic organs alone do not touch
+// it). It must be removed before parseConsolidateOpts, which rejects unknown
+// flags, because it is a command-level step, not a library ConsolidateOption.
+//
+// Split out so the hosted sleep cycle (serve_sleep.go) derives its pass from
+// the SAME sleepArgs() list the CLI parses, instead of re-implementing this
+// strip and drifting from it.
+func splitSessionNoiseFlag(args []string) ([]string, bool) {
+	found := false
+	kept := make([]string, 0, len(args))
+	for _, a := range args {
+		if a == "--clear-session-noise" {
+			found = true
+			continue
+		}
+		kept = append(kept, a)
+	}
+	return kept, found
 }
 
 // parseConsolidateOpts builds ConsolidateOptions from the sub-flags plus the
