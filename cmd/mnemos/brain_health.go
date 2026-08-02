@@ -97,6 +97,16 @@ func printBrainHealthExplain() {
                     floor as their evidence ages without re-verification.
       staleness     share of valid beliefs not seen or re-verified within the horizon
                     — "still load-bearing, or just still present?"
+      trust_decay   share of still-trusted beliefs that fall below the same floor
+                    within a month if nobody re-verifies them, each decaying at its
+                    own half-life. low_trust is what has already gone; this is what
+                    is going. A month of re-verification work, named in advance.
+      skill_coverage share of recorded actions whose outcome was ever observed — an
+                    action with no outcome teaches the brain nothing.
+
+    A vital marked [ ?? ] is unknown: nothing has been measured for it yet. That
+    is not a pass. It never worsens the overall verdict either — absence of
+    evidence of a problem is not evidence of one.
 
     integrity — structural smell tests, not cognitive ones
       orphan_claims       beliefs with zero evidence; every belief should trace to a
@@ -110,12 +120,18 @@ func printBrainHealthExplain() {
 `)
 }
 
+// healthMark renders a status. Unknown gets its own marker rather than falling
+// into the ok branch: "we did not measure this" read as "[ ok ]" is the exact
+// failure the unknown status was introduced to end, and the human view is where
+// most people read the report.
 func healthMark(s mnemos.HealthStatus) string {
 	switch s {
 	case mnemos.HealthUnhealthy:
 		return "[CRIT]"
 	case mnemos.HealthDegraded:
 		return "[warn]"
+	case mnemos.HealthUnknown:
+		return "[ ?? ]"
 	default:
 		return "[ ok ]"
 	}

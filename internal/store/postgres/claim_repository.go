@@ -48,15 +48,16 @@ func (r ClaimRepository) upsertWithReason(ctx context.Context, claims []domain.C
 
 	now := time.Now().UTC()
 	upsert := fmt.Sprintf(`
-INSERT INTO %s (id, text, type, confidence, status, created_at, created_by, valid_from, trust_score, valid_to, lifecycle, subject_class, durability, confidence_components,
+INSERT INTO %s (id, text, type, confidence, status, created_at, created_by, valid_from, trust_score, valid_to, half_life_days, lifecycle, subject_class, durability, confidence_components,
                 test_id, test_requirement_ref, test_author, test_last_modified, test_last_run_at, test_pass_count, test_fail_count)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, NULL, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, NULL, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 ON CONFLICT (id) DO UPDATE SET
   text = EXCLUDED.text,
   type = EXCLUDED.type,
   confidence = EXCLUDED.confidence,
   status = EXCLUDED.status,
   valid_from = EXCLUDED.valid_from,
+  half_life_days = CASE WHEN EXCLUDED.half_life_days > 0 THEN EXCLUDED.half_life_days ELSE claims.half_life_days END,
   lifecycle = EXCLUDED.lifecycle,
   subject_class = EXCLUDED.subject_class,
   durability = EXCLUDED.durability,
@@ -90,7 +91,7 @@ VALUES ($1, $2, $3, $4, $5, $6)`, qualify(r.ns, "claim_status_history"))
 		if _, err := tx.ExecContext(ctx, upsert,
 			claim.ID, claim.Text, string(claim.Type), claim.Confidence,
 			string(claim.Status), claim.CreatedAt.UTC(), actorOr(claim.CreatedBy),
-			validFrom.UTC(), string(claim.Lifecycle), string(claim.SubjectClass),
+			validFrom.UTC(), claim.HalfLifeDays, string(claim.Lifecycle), string(claim.SubjectClass),
 			string(claim.Durability.Normalized()), encodeConfidenceComponents(claim.ConfidenceComponents),
 			claim.TestID, claim.TestRequirementRef, claim.TestAuthor,
 			nullTime(claim.TestLastModified), nullTime(claim.TestLastRunAt),
@@ -658,7 +659,7 @@ func nullTime(t time.Time) any {
 // goes through claimColumns.
 var claimColumnNames = []string{
 	"id", "text", "type", "confidence", "status", "created_at", "created_by",
-	"trust_score", "valid_from", "valid_to", "lifecycle", "subject_class",
+	"trust_score", "valid_from", "valid_to", "half_life_days", "lifecycle", "subject_class",
 	"durability", "confidence_components",
 	"test_id", "test_requirement_ref", "test_author", "test_last_modified",
 	"test_last_run_at", "test_pass_count", "test_fail_count",
@@ -698,7 +699,7 @@ func scanClaimRow(rows *sql.Rows) (domain.Claim, error) {
 	var testLastModified, testLastRunAt sql.NullTime
 	if err := rows.Scan(
 		&c.ID, &c.Text, &typ, &c.Confidence, &status,
-		&c.CreatedAt, &c.CreatedBy, &c.TrustScore, &validFrom, &validTo, &lifecycle, &subjectClass, &durability, &confidenceComponents,
+		&c.CreatedAt, &c.CreatedBy, &c.TrustScore, &validFrom, &validTo, &c.HalfLifeDays, &lifecycle, &subjectClass, &durability, &confidenceComponents,
 		&c.TestID, &c.TestRequirementRef, &c.TestAuthor, &testLastModified, &testLastRunAt, &c.TestPassCount, &c.TestFailCount,
 	); err != nil {
 		return domain.Claim{}, fmt.Errorf("scan claim row: %w", err)

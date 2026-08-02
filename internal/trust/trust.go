@@ -76,10 +76,7 @@ func IsStale(latestEvidence, lastVerified, now time.Time, halfLifeDays, threshol
 	if hl <= 0 {
 		hl = FreshnessHalfLifeDays
 	}
-	ref := latestEvidence
-	if !lastVerified.IsZero() && lastVerified.After(ref) {
-		ref = lastVerified
-	}
+	ref := FreshnessRef(latestEvidence, lastVerified)
 	if ref.IsZero() {
 		return false
 	}
@@ -99,14 +96,28 @@ func Staleness(latestEvidence, lastVerified, now time.Time, halfLifeDays float64
 	if hl <= 0 {
 		hl = FreshnessHalfLifeDays
 	}
-	ref := latestEvidence
-	if !lastVerified.IsZero() && lastVerified.After(ref) {
-		ref = lastVerified
-	}
+	ref := FreshnessRef(latestEvidence, lastVerified)
 	if ref.IsZero() {
 		return 0
 	}
 	return 1 - freshnessFactorWithHalfLife(ref, now, hl)
+}
+
+// FreshnessRef returns the instant a belief's freshness decays from: the most
+// recent of its latest evidence and its last explicit re-verification, since
+// either signal means "we still had reason to believe this then". The zero time
+// means the belief carries NEITHER signal and so cannot be dated — decay is
+// unmeasurable for it, which is not the same as it being fresh.
+//
+// Exported because the decay model is also read FORWARD: a caller projecting
+// what a belief's trust will be at a future instant (the brain-health
+// trust_decay vital) must decay from the same reference Staleness and IsStale
+// report against, rather than re-deriving it and drifting from the model.
+func FreshnessRef(latestEvidence, lastVerified time.Time) time.Time {
+	if !lastVerified.IsZero() && lastVerified.After(latestEvidence) {
+		return lastVerified
+	}
+	return latestEvidence
 }
 
 func freshnessFactorWithHalfLife(latest, now time.Time, halfLifeDays float64) float64 {

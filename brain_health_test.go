@@ -38,12 +38,13 @@ func TestBrainHealth_EmptyIsHealthy(t *testing.T) {
 	if h.Status != HealthOK {
 		t.Errorf("empty brain status = %q, want healthy", h.Status)
 	}
-	// Six since skill_coverage was added: the five claim-derived vitals plus
-	// one measuring whether the action -> outcome -> lesson layer is actually
-	// being built. The count is pinned deliberately — a vital silently
-	// disappearing is the failure this assertion exists to catch.
-	if len(h.Vitals) != 6 {
-		t.Errorf("want 6 vitals, got %d", len(h.Vitals))
+	// Seven: the five claim-derived vitals of the ADR-0019 v1 set, plus
+	// skill_coverage (is the action -> outcome -> lesson layer being built at
+	// all?) and trust_decay (is trust falling faster than it is replaced?). The
+	// count is pinned deliberately — a vital silently disappearing is the
+	// failure this assertion exists to catch.
+	if len(h.Vitals) != 7 {
+		t.Errorf("want 7 vitals, got %d", len(h.Vitals))
 	}
 	if len(h.Pathologies) != 3 {
 		t.Errorf("want 3 pathologies, got %d", len(h.Pathologies))

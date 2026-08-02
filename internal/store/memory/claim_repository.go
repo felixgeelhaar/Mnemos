@@ -65,6 +65,17 @@ func (r ClaimRepository) upsertWithReason(_ context.Context, claims []domain.Cla
 				stored.TrustScore = existing.TrustScore
 			}
 		}
+		// Same rule for the per-claim freshness half-life, matching the
+		// SQL backends' `CASE WHEN excluded.half_life_days > 0` upsert.
+		// A re-extracted claim carries no half-life (the volatility
+		// classifier returns 0 whenever it is not confident), so writing
+		// it through unconditionally would reset an override set by
+		// MarkVerified as soon as the same claim came back through ingest.
+		if claim.HalfLifeDays == 0 {
+			if existing, ok := r.state.claims[claim.ID]; ok {
+				stored.HalfLifeDays = existing.HalfLifeDays
+			}
+		}
 
 		if _, ok := r.state.claims[claim.ID]; !ok {
 			r.state.claimOrder = append(r.state.claimOrder, claim.ID)

@@ -61,3 +61,38 @@ func TestPrintBrainHealthHuman_ExplainDescribesEachVital(t *testing.T) {
 		t.Errorf("--explain output should not also print the hint; got:\n%s", out)
 	}
 }
+
+// #325 made an unmeasured vital report `unknown` in the data, but the human
+// renderer's default branch mapped every non-warn status to "[ ok ]" — so
+// `mnemos health --human` printed a green tick beside calibration over ZERO
+// adjudicated beliefs while the JSON right next to it said "unknown". The
+// status column is the whole point of the distinction; rendering it as OK
+// undoes the fix for every reader who does not pipe the output through jq.
+func TestPrintBrainHealthHuman_UnknownIsNotRenderedAsOK(t *testing.T) {
+	h := sampleBrainHealth()
+	h.Vitals = append(h.Vitals, mnemos.Vital{
+		Name: "calibration", Value: 0, Status: mnemos.HealthUnknown,
+		Detail: "expected calibration error over 0 adjudicated belief(s)",
+	})
+	out := captureStdout(t, func() { printBrainHealthHuman(h, false) })
+
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "calibration") && strings.Contains(line, "[ ok ]") {
+			t.Fatalf("an unmeasured vital must not render as ok; got:\n%s", out)
+		}
+	}
+	if !strings.Contains(out, "[ ?? ]") {
+		t.Errorf("expected an unknown marker in the human view; got:\n%s", out)
+	}
+}
+
+// The guide describes every vital the report can print; a vital nobody
+// explained is a number nobody can act on.
+func TestPrintBrainHealthHuman_ExplainCoversTrustDecay(t *testing.T) {
+	out := captureStdout(t, func() { printBrainHealthHuman(sampleBrainHealth(), true) })
+	for _, want := range []string{"trust_decay", "skill_coverage", "unknown"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("--explain output missing %q; got:\n%s", want, out)
+		}
+	}
+}

@@ -16,6 +16,7 @@ make build          # Build bin/mnemos
 make install        # Install mnemos to $GOPATH/bin
 make test           # Run all tests (includes 133 eval cases across 13 suites under data/eval/*.yaml)
 make test-race      # What CI actually runs (-race). `make check` omits it, so green locally != green in CI.
+make brain-eval     # Cognitive-process A/B harness — does consolidation IMPROVE the brain? (see below)
 make fmt            # go fmt ./...
 make lint           # go vet + golangci-lint
 make sqlc           # Regenerate sqlc query code from sql/sqlite/
@@ -92,6 +93,7 @@ this file, which made them invisible to anyone navigating by it:
 | `internal/consolidate/` | Systems consolidation (ADR 0011 Phase B) |
 | `internal/curiosity/` | Turns passive metacognition (knowledge gaps) into active questions |
 | `internal/bias/` | Explainable bias indicators over the belief set |
+| `internal/brainbench/` | Paired A/B harness measuring whether the cognitive processes *improve* a brain (`make brain-eval`) |
 | `internal/autoedge/` | Wires the implicit relationships that fall out of writes |
 | `internal/kernel/` | axi-go governance layer for the library core |
 | `internal/govwrite/` | The governed daemon-write surface — every durable write goes through it |
@@ -119,6 +121,8 @@ this file, which made them invisible to anyone navigating by it:
 
 **Multi-tenant per server (ADR 0007, Phase 1):** `mcp --http --require-tenant` serves many tenants from one process. The JWT carries a `tnt` claim (`Claims.Tenant`; mint with `token issue --tenant` / `agent token issue --tenant`). In this mode the auth hook **denies** a token without a valid tenant (fail-closed), `withTenant` stashes the effective tenant, and `resolveDSNForContext` scopes the request per backend; the cognitive path routes through a per-tenant `memFacade.Tenant()` cache. **Two isolation models (`internal/store.TenancyModeForDSN`):** Postgres uses **row-level** isolation — `resolveDSNForContext` appends `?tenant=<id>`, the provider pins the `mnemos.tenant` GUC, and RLS isolates the request (needs a non-superuser role — superusers bypass RLS). sqlite / mysql / **local** libSQL use **namespace-per-tenant** physical isolation — `resolveDSNForContext` sets `?namespace=<derived>` where the derived namespace is `store.TenantNamespace(tenant)` (a `t_`-prefixed, hash-suffixed, charset-safe mapping since the tenant charset is broader than the namespace charset), and the provider partitions into a separate schema/database/file created on first open. Backends that cannot isolate — `memory://` and **remote** libSQL (it discards `namespace`) — report `TenancyNone` and `--require-tenant` refuses to start (fail-closed). The reserved default namespace `mnemos` is the namespace-model analogue of the reserved `__default__` tenant: a derived tenant namespace can never equal it. Guardrails: `TestSQLite_CrossTenantIsolation`, `TestLibsql_LocalCrossTenantIsolation`, `TestMySQL_CrossTenantIsolation`, `TestGRPC_CrossTenantIsolation_SQLite`, `TestTenant_SQLiteNamespaceIsolation`, plus the Postgres RLS suite. **Connection reuse:** the MCP server caches one read pool per tenant-scoped DSN (`enableConnCache` in `dsn.go`; keyed by the resolved DSN incl. `?tenant=`, so tenants never share a pool and RLS is unchanged) — reads reuse a pooled conn instead of opening one per request. Writes (`openWriter`) stay per-request. **Phase 2 (opt-in, `MNEMOS_PG_SHARED_POOL`/`db.shared_pool`):** one shared Postgres pool serves all tenants — a per-request `*sql.Conn` is checked out, pinned with `SET mnemos.tenant`, and its Closer runs `RESET mnemos.tenant` before releasing it (fail-closed if ever reused unset). Repos take a `pgQuerier` interface (`*sql.DB` for the default per-tenant-pool path, `*sql.Conn` for shared); `openSharedTenantConn`/`getSharedPool` in `internal/store/postgres/postgres.go`. The cmd conn-cache is disabled in this mode (it would pin one conn per tenant). Default stays the per-tenant-pool model. Verified by `TestPostgres_CrossTenantIsolation` (both modes, skips on an RLS-bypassing role) — the ADR-0007 guardrail — plus an MCP e2e showing 30 mixed-tenant requests share ~2 connections.
 - `mnemos serve [--grpc-port N]` — REST + gRPC API service (the "as a service" surface; JWT auth, TLS/mTLS, multi-tenant namespace/RLS). `serve --require-tenant` (ADR 0007) makes every REST **and** gRPC request scope to its token's `tnt` claim via a per-request tenant connection (Postgres RLS or namespace-per-tenant for sqlite/mysql/local libSQL — see the MCP note above): REST auths reads too and a `tenantScopeMiddleware` opens the tenant conn (handlers resolve it through `scopedConn/scopedWriter/scopedMem` in `serve_tenant.go`); gRPC's interceptor opens it and methods resolve via `connFor/writerFor/memFor` (`internal/server/grpc`). Secure by default (v0.85.1+): every data endpoint requires a JWT (reads too); only bare-liveness/static infra endpoints (`/health`, `/healthz`, `/`, `/app`) stay unauthenticated. `/internal/metrics` is **authenticated by default** (opt out with `serve --metrics-public`; it is excluded from the `--public-reads` bypass) and the version/DB-probe report lives behind auth at `/internal/ready`. Anonymous reads are an explicit opt-in (`serve --public-reads`); `mcp --http` defaults to `--auth`. Guarded by `TestREST_ReadsRequireAuthByDefault`, `TestAuthenticate_ReadsRequireTokenByDefault`, `TestPostgres_CrossTenantIsolation`, `TestGRPC_CrossTenantIsolation`, and `TestGRPC_CrossTenantIsolation_SQLite`. Distinct from the MCP surface; API parity across MCP/HTTP/gRPC is enforced by `TestAPISurfaceParity`.
+
+**Hosted sleep cycle (`cmd/mnemos/serve_sleep.go`).** `serve` is long-lived and used to consolidate *never* — the local brain's sleep (`maybeSleep`, `sleep_schedule.go`) hangs off a Claude Code session hook a server never receives, so on a hosted brain narration accumulated, dissonance ratcheted one way, and the ADR-0019 vitals collected no time series. `startConsolidationCycle` runs a ticker: one pass ~2 minutes after boot (a server restarted daily would otherwise never reach its first 20h tick) and then every `MNEMOS_CONSOLIDATE_INTERVAL` (default `sleepInterval`, 20h; 0 disables; `serve --consolidate-interval` / `serve.consolidate_interval`). The pass is derived from `sleepArgs()` via `sleepConsolidateOptions` rather than restated, so hosted and local brains consolidate identically, and it includes the LLM session-noise clearing (`runSessionNoisePass`, extracted from `prune --session-noise`) — the only organ that LOWERS dissonance — skipped cleanly when no LLM is configured. Under `--require-tenant` each tenant partition is consolidated separately via `store.EnumerateTenants` (never the base DSN: that is an empty default namespace, or a cross-tenant write under Postgres RLS); a backend that cannot enumerate gets no pass and an error log, never a silent fallback. Ticks that land while a pass is running are skipped and counted; every pass runs behind a `recover()` and per-target error isolation, so consolidation can never take the listener down. The cycle is per process — with N replicas on one store, set the interval to 0 on all but one.
 
 ### Internal Libraries (owned by same author)
 
@@ -192,6 +196,7 @@ MNEMOS_EMBED_MODEL     # Embedding model name
 MNEMOS_EMBED_BASE_URL  # Embedding endpoint
 MNEMOS_LLM_CACHE_MAX_BYTES  # LLM extraction cache cap (default 1 GiB; 0 disables eviction)
 MNEMOS_CAPTURE_TIMEOUT      # SessionEnd capture budget (Go duration, default 4m). Ceiling, not a reservation; sized for a slow local model. Bounds the whole SessionEnd drain (all chunks share it), not one chunk. `mnemos init` derives the Claude Code hook timeout from it (`captureHookTimeoutFor`, budget + 60s headroom, floor 300s) — re-run init after raising this so the installed timeout widens to match.
+MNEMOS_CONSOLIDATE_INTERVAL # `mnemos serve` sleep cadence (Go duration, default 20h = sleepInterval; 0 disables). The hosted analogue of the local session-start sleep: a ticker in serve consolidates every tenant, plus one pass ~2m after boot. Per process — set 0 on all but one replica. Flag: `serve --consolidate-interval`; YAML: `serve.consolidate_interval`.
 MNEMOS_DB_MAX_CONNS         # Postgres/MySQL pool MaxOpenConns (default 25)
 MNEMOS_DB_MAX_IDLE_CONNS    # Postgres/MySQL pool MaxIdleConns (default 5)
 MNEMOS_DB_CONN_MAX_LIFETIME # Pool ConnMaxLifetime, e.g. "30m" (default 30m)
@@ -201,6 +206,44 @@ MNEMOS_TELEMETRY_ENDPOINT   # POST destination for `mnemos metrics --workspace -
 ```
 
 Note: Anthropic has no embedding API — use a separate provider for embeddings.
+
+## Evaluating whether the cognitive processes actually help (`make brain-eval`)
+
+`data/eval/*.yaml` measures **components** (did the extractor/relater/ranker produce the
+right output?). It cannot measure whether the continuous processes — consolidate, forget,
+reinforce, credit, salience, synthesize, decay — **improve** a brain, and until this harness
+nothing did: `mnemos consolidate` prints counters (`forgotten: 412`), which establish that
+the pass *ran*, not that anything got better. That made every claim about the brain
+improving unfalsifiable.
+
+`internal/brainbench` + `tools/brainbench` + `data/eval/brainbench/*.yaml` close it with a
+paired A/B experiment: seed one pristine brain from a scenario corpus (offline and
+deterministic — rule-based extraction, a hashed-bag-of-words stub embedder), copy the file
+three times, run the process set on ONE copy, and diff the outcomes. The third copy is
+untreated and measured independently to establish the noise floor; when the two untreated
+arms disagree the run is reported `invalid` and no delta is attributed. Every arm is a
+throwaway copy measured exactly once, because measurement is itself a mutation (recall
+applies the Hebbian / reconsolidation / inhibition write-backs).
+
+Design rules that are load-bearing, not stylistic:
+- **Metrics with no defensible direction are `Descriptive` and never scored.** Forgetting
+  mechanically shrinks the claim count and raises mean trust; scoring those as wins would
+  report success for a process that only deleted knowledge.
+- **`gold_survival` is the anti-gaming metric.** A process can raise precision and cut
+  dissonance by deleting claims; only survival notices.
+  `TestRun_ReportsRegressionWhenKnowledgeIsDestroyed` asserts a brain-destroying config is
+  reported as a regression, so the harness provably cannot report only good news.
+- **Unmeasurable means `unknown`, never 0.** 0.0 is the *best* value for free energy,
+  calibration error and dissonance, so flattening would score an empty brain as healthy.
+  ADR 0019's `HealthUnknown` maps straight through.
+- **Activity and benefit are separate fields**, reconciled by the verdict:
+  `inert-process-did-nothing` vs `ran-no-measurable-effect` vs improved/regressed/mixed.
+- The limitations list ships **inside** every JSON report, because reports get pasted
+  around without their README.
+
+Not part of `make test` (each scenario seeds and measures four SQLite brains).
+`make brain-eval-strict` exits non-zero on a regression; the default does not, deliberately —
+gating creates pressure to weaken scenarios until they stop reporting one.
 
 ## CI
 

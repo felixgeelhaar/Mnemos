@@ -1,0 +1,78 @@
+# Does consolidation clean up a brain polluted by conversational narration?
+#
+# CLAUDE.md records that a census of a real 5,210-claim brain found roughly 48%
+# agent narration, and that `mnemos prune --narration` exists precisely because
+# the ingest filters do not run over already-stored claims. That raises a
+# falsifiable question this harness can settle: does the CONSOLIDATION pass
+# reduce stored narration, or does narration survive it untouched?
+#
+# noise_fraction uses extract.IsJunk — mnemos's own shipped predicate, the same
+# one `prune --narration` uses — so the metric is not an invention of this
+# harness. If consolidation leaves noise_fraction flat, that is a real and
+# reportable gap between what the sleep pass does and what a polluted brain
+# needs, not a defect in the measurement.
+id: noisy_capture
+description: A brain polluted with agent narration; does the sleep pass reduce stored noise?
+
+corpus:
+  - id: c1
+    source: transcript
+    age_days: 30
+    text: |
+      Let me check the configuration for you.
+      The API gateway timeout is thirty seconds.
+      I'll look at that now.
+
+  - id: c2
+    source: transcript
+    age_days: 24
+    text: |
+      Great, thanks!
+      The retry budget for downstream calls is three attempts with exponential backoff.
+      Here is what I found:
+
+  - id: c3
+    source: transcript
+    age_days: 18
+    text: |
+      Sounds good.
+      Circuit breakers open after five consecutive failures.
+      Let me run the tests.
+
+  - id: c4
+    source: transcript
+    age_days: 11
+    text: |
+      The API gateway timeout is thirty seconds.
+      Perfect.
+
+  - id: c5
+    source: transcript
+    age_days: 5
+    text: |
+      Now let me update the memory graph with what we learned.
+      Health checks probe the readiness endpoint every ten seconds.
+
+warmup:
+  - what is the API gateway timeout
+  - when do circuit breakers open
+
+probes:
+  - id: p-timeout
+    query: what is the API gateway timeout
+    expect: thirty seconds
+  - id: p-retry
+    query: what is the retry budget for downstream calls
+    expect: three attempts
+  - id: p-breaker
+    query: when do circuit breakers open
+    expect: five consecutive failures
+  - id: p-health
+    query: how often do health checks run
+    expect: ten seconds
+
+process:
+  dedupe_threshold: 0.92
+  forget_below_trust: 0.35
+  decay_associations: true
+  decay_inhibition: true

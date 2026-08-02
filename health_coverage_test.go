@@ -113,3 +113,28 @@ func TestBrainHealth_SkillCoverageDegradesOnUnobservedActions(t *testing.T) {
 		t.Error("ten actions with zero observed outcomes must not read as healthy")
 	}
 }
+
+// The same regression, one row down. low_trust and staleness are FRACTIONS of
+// currently-valid beliefs, so on a brain holding none they are 0/0 — and were
+// rendered as a clean "0.000 healthy", indistinguishable from a brain holding
+// thousands that has genuinely lost none of them. The row is where that
+// difference has to show.
+func TestBrainHealth_ClaimRatesWithNoBeliefsAreUnknown(t *testing.T) {
+	mem, err := New(WithStorage("memory://health-no-beliefs"), WithActor("tester"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := mem.BrainHealth(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"low_trust", "staleness"} {
+		if got := vitalByName(h, name); got.Status != HealthUnknown {
+			t.Errorf("%s over 0 valid beliefs = %q, want %q", name, got.Status, HealthUnknown)
+		}
+	}
+	// And it still must not drag the verdict down.
+	if h.Status != HealthOK {
+		t.Errorf("empty brain verdict = %q, want %q", h.Status, HealthOK)
+	}
+}

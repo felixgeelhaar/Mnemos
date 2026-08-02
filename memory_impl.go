@@ -1063,8 +1063,10 @@ func (m *memory) Consolidate(ctx context.Context, opts ConsolidateOptions) (Cons
 	}
 	// Active forgetting: prune stale, low-trust, non-promoted claims — the
 	// offline synaptic renormalisation the brain does during sleep. Reduced
-	// retrievability, not erasure (marked deprecated, history preserved). A memory in
-	// the replay set is protected (ADR 0015 §3).
+	// retrievability, not erasure: valid-time is closed and the history kept.
+	// Status is NOT touched — see ConsolidateOptions.ForgetBelowTrust for why
+	// that distinction has already misled two subsystems. A memory in the replay
+	// set is protected (ADR 0015 §3).
 	if opts.ForgetBelowTrust > 0 {
 		forgotten, protectedSkipped, ferr := m.forgetStaleClaims(ctx, opts.ForgetBelowTrust, replayProtected)
 		if ferr != nil {
@@ -1791,9 +1793,6 @@ func (m *memory) forgetRefutedClaims(ctx context.Context) (int, error) {
 	return n, nil
 }
 
-// forgetStaleClaims invalidates non-promoted claims whose trust is below the
-// floor by setting their valid-to to now — so recall (which filters by valid
-// time) stops surfacing them, while the claim + its history are preserved (a
 // salienceProtectFloor is the intrinsic-importance threshold above which a claim
 // is kept by forgetStaleClaims even when its trust has fallen below the forget
 // floor. Tuned so only genuinely consequential claims (a decision, or a well-
@@ -1801,11 +1800,25 @@ func (m *memory) forgetRefutedClaims(ctx context.Context) (int, error) {
 // while the low-confidence, single-source, unverified tail is still let go.
 const salienceProtectFloor = 0.66
 
+// forgetStaleClaims invalidates non-promoted claims whose trust is below the
+// floor by setting their valid-to to now — so recall (which filters by valid
+// time) stops surfacing them, while the claim + its history are preserved (a
 // point-in-time query can still see what was once believed). This is forgetting
-// as reduced retrievability, not erasure. Promoted (human-endorsed) claims are
-// never forgotten, regardless of decay. Already-invalidated claims are skipped.
-// Intrinsically salient claims are also protected — see the salience gate below —
-// as are claims in the same pass's replay set (protected, ADR 0015 §3), passed in.
+// as reduced retrievability, not erasure. Status is NOT touched: a swept claim
+// stays `active`, and deprecation is a different mechanism entirely — see
+// ConsolidateOptions.ForgetBelowTrust.
+//
+// This comment used to be SPLIT IN HALF by the const above, breaking mid-sentence
+// at "…preserved (a" and resuming after the declaration. Go therefore attached
+// only the second half to this function, and the accurate description of the
+// mechanism was unreadable where anyone would look for it. Two other comments
+// then described forgetting as "marked deprecated" — the plausible route by which
+// that error spread. Keep this contiguous.
+//
+// Promoted (human-endorsed) claims are never forgotten, regardless of decay.
+// Already-invalidated claims are skipped. Intrinsically salient claims are also
+// protected — see the salience gate below — as are claims in the same pass's
+// replay set (protected, ADR 0015 §3), passed in.
 // Returns (forgotten, protectedSkipped): the second counts claims that WOULD have
 // been forgotten but were spared by the replay-set protection.
 func (m *memory) forgetStaleClaims(ctx context.Context, belowTrust float64, protected map[string]bool) (int, int, error) {
@@ -2149,6 +2162,22 @@ const (
 	// healthStalenessHorizonDays: a currently-valid belief not verified/created within
 	// this window counts toward staleness (a recency proxy for freshness decay).
 	healthStalenessHorizonDays = 90.0
+
+	// healthTrustDecayHorizonDays is how far ahead the trust_decay vital projects.
+	// A month, for two reasons: it is the natural cadence at which anyone reviews
+	// a brain, and it is shorter than every half-life in play (the 90-day default,
+	// the 14-day volatile one), so the vital leads low_trust and staleness rather
+	// than restating them after the fact.
+	healthTrustDecayHorizonDays = 30.0
+	// healthTrustDecay{Warn,Crit} are DERIVED, not chosen: they are the outflow
+	// which, sustained over a quarter (three horizons), carries an entirely
+	// trusted brain to low_trust's own warn / crit line on its own. Expressing
+	// them as a share of the low_trust thresholds keeps the pair consistent —
+	// re-tuning the floor's thresholds re-tunes the rate that fills it, instead
+	// of leaving two constants to drift apart. (Approximate: it ignores the
+	// compounding as the trusted base shrinks, which errs toward warning early.)
+	healthTrustDecayWarn = healthLowTrustWarn / 3
+	healthTrustDecayCrit = healthLowTrustCrit / 3
 	// healthStaleExpectationCrit: an open-expectation backlog past this many overdue is
 	// critical (the prediction loop is stalling).
 	healthStaleExpectationCrit = 25
@@ -2233,6 +2262,71 @@ func (m *memory) skillCoverageVital(ctx context.Context) Vital {
 	return Vital{name, rate, gradeHigherWorse(1-rate, healthSkillCoverageWarn, healthSkillCoverageCrit), detail}
 }
 
+// projectTrustDecay evaluates one currently-valid belief against the freshness
+// decay model twice — now, and at the end of the horizon — and reports whether
+// it counts as trusted today and, if so, whether it stops being trusted before
+// the horizon is out.
+//
+// Why the model rather than the stored trust_score: the persisted score is
+// recomputed with the GLOBAL half-life (pipeline's defaultTrustScorer and
+// Consolidate both call trust.Score), so it cannot see a belief the extractor
+// classified as volatile — precisely the belief whose decay matters most. The
+// per-claim HalfLifeDays is honoured everywhere it is read (query staleness,
+// curiosity, float-back) except in the number that gets written down, so the
+// vital reads the model, not the column. Both endpoints come from the same
+// evaluation, so the comparison is internally consistent whatever the level is.
+//
+// Two deliberate conservatisms, both erring toward under-reporting decay:
+//   - the freshness reference is the belief's own ValidFrom / LastVerified
+//     rather than its freshest evidence event's timestamp, which this scan does
+//     not load. ValidFrom is set from the SOURCE event, so it is never newer
+//     than the true reference; an older reference has already decayed further
+//     and is likelier to sit on the freshness floor, where nothing decays.
+//   - the evidence count is the raw link count, not the independence-graded one
+//     (grading needs each event's author). It can only overstate corroboration,
+//     which lifts the level and delays the crossing.
+//
+// A belief with neither a ValidFrom nor a LastVerified cannot be dated at all,
+// so its decay is unmeasurable and it is excluded from both counts rather than
+// silently counted as stable.
+func projectTrustDecay(c domain.Claim, evidenceCount int, now, horizon time.Time) (isTrusted, willDecay bool) {
+	ref := trust.FreshnessRef(c.ValidFrom, c.LastVerified)
+	if ref.IsZero() {
+		return false, false
+	}
+	if trust.ScoreWithHalfLife(c.Confidence, evidenceCount, ref, now, c.HalfLifeDays) < healthLowTrustFloor {
+		return false, false // already below the floor: low_trust owns it, there is no fall left
+	}
+	return true, trust.ScoreWithHalfLife(c.Confidence, evidenceCount, ref, horizon, c.HalfLifeDays) < healthLowTrustFloor
+}
+
+// trustDecayVital reports the share of currently-trusted beliefs whose trust
+// falls through the low-trust floor within the horizon unless something
+// re-verifies them — the rate at which the brain is LOSING trust, as against
+// low_trust's count of what it has already lost.
+//
+// Framed as a crossing rate rather than as aggregate trust lost per unit time,
+// because the aggregate is perverse: exponential decay is steepest right after
+// evidence arrives, so a brain being actively fed would score WORST, and one
+// whose every belief had already bottomed out on the freshness floor would
+// score a clean zero. The crossing rate is monotone in the direction anyone
+// actually cares about and is directly actionable — it names beliefs that need
+// re-verifying this month.
+//
+// Unknown when no belief is currently above the floor: an empty brain, or one
+// whose beliefs have all already decayed. Neither has trust left to lose, and
+// reporting a green 0 for the second would be the exact failure #325 fixed.
+func trustDecayVital(trusted, decaying int) Vital {
+	if trusted == 0 {
+		return Vital{"trust_decay", 0, HealthUnknown,
+			"no belief is currently above the trust floor; there is no decay to measure"}
+	}
+	rate := float64(decaying) / float64(trusted)
+	return Vital{"trust_decay", rate, gradeHigherWorse(rate, healthTrustDecayWarn, healthTrustDecayCrit),
+		fmt.Sprintf("%d/%d trusted beliefs decay below trust %.2f within %.0f days unless re-verified",
+			decaying, trusted, healthLowTrustFloor, healthTrustDecayHorizonDays)}
+}
+
 func gradeWithSamples(samples int, value, warn, crit float64) HealthStatus {
 	if samples <= 0 {
 		return HealthUnknown
@@ -2288,6 +2382,10 @@ func (m *memory) BrainHealth(ctx context.Context) (BrainHealth, error) {
 	}
 	claimIDs := make(map[string]struct{}, len(claims))
 	validCount, lowTrust, stale, orphans := 0, 0, 0, 0
+	// trust_decay reads the SAME beliefs forward: how many of those trusted today
+	// stop being trusted within the horizon if nobody re-verifies them.
+	decayHorizon := now.Add(time.Duration(healthTrustDecayHorizonDays * 24 * float64(time.Hour)))
+	trusted, decaying := 0, 0
 	for _, c := range claims {
 		claimIDs[c.ID] = struct{}{} // every claim, so dangling-edge detection sees them all
 		if !c.ValidTo.IsZero() {
@@ -2318,6 +2416,12 @@ func (m *memory) BrainHealth(ctx context.Context) (BrainHealth, error) {
 		if evidenceCount[c.ID] == 0 {
 			orphans++ // a claim requires evidence — an orphan is a data-integrity smell
 		}
+		if t, d := projectTrustDecay(c, evidenceCount[c.ID], now, decayHorizon); t {
+			trusted++
+			if d {
+				decaying++
+			}
+		}
 	}
 	rate := func(n int) float64 {
 		if validCount == 0 {
@@ -2334,10 +2438,13 @@ func (m *memory) BrainHealth(ctx context.Context) (BrainHealth, error) {
 			fmt.Sprintf("expected calibration error over %d adjudicated belief(s)", cal.Samples)},
 		{"dissonance", dissonance, gradeHigherWorse(dissonance, healthDissonanceWarn, healthDissonanceCrit),
 			"active high-stakes contradictions per belief"},
-		{"low_trust", lowTrustRate, gradeHigherWorse(lowTrustRate, healthLowTrustWarn, healthLowTrustCrit),
+		// Both are fractions OF validCount, so gradeWithSamples: 0/0 is not a
+		// brain that has lost nothing, it is a brain nothing was measured on.
+		{"low_trust", lowTrustRate, gradeWithSamples(validCount, lowTrustRate, healthLowTrustWarn, healthLowTrustCrit),
 			fmt.Sprintf("%d/%d valid beliefs below trust %.2f", lowTrust, validCount, healthLowTrustFloor)},
-		{"staleness", stalenessRate, gradeHigherWorse(stalenessRate, healthStalenessWarn, healthStalenessCrit),
+		{"staleness", stalenessRate, gradeWithSamples(validCount, stalenessRate, healthStalenessWarn, healthStalenessCrit),
 			fmt.Sprintf("%d/%d valid beliefs unverified in %.0f days", stale, validCount, healthStalenessHorizonDays)},
+		trustDecayVital(trusted, decaying),
 		m.skillCoverageVital(ctx),
 	}
 

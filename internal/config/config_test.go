@@ -207,6 +207,31 @@ capture:
 	}
 }
 
+// The hosted brain's sleep cadence must be settable from the config file, not
+// only from the environment: how often a production server consolidates is a
+// deployment decision that belongs in reviewable config.
+func TestServeConsolidateIntervalEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	path := writeConfig(t, dir, "serve:\n  consolidate_interval: 6h\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.EnvOverrides()["MNEMOS_CONSOLIDATE_INTERVAL"]; got != "6h" {
+		t.Errorf("MNEMOS_CONSOLIDATE_INTERVAL = %q, want 6h", got)
+	}
+
+	// Unset must not shadow the built-in default with "".
+	empty := writeConfig(t, dir, "serve:\n  port: 9000\n")
+	ecfg, err := Load(empty)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, ok := ecfg.EnvOverrides()["MNEMOS_CONSOLIDATE_INTERVAL"]; ok {
+		t.Error("an unset consolidate_interval must not reach the environment")
+	}
+}
+
 func TestServerBlockEnvOverrides(t *testing.T) {
 	dir := t.TempDir()
 	path := writeConfig(t, dir, `
