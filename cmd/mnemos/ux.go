@@ -117,19 +117,29 @@ func printFirstRunHints() {
 // commands is the full set of top-level commands, used both for typo
 // suggestions (suggestCommand) and as the single source of truth for what the
 // dispatcher accepts. Keep in sync with the switch in main.go.
+//
+// "keep in sync" was the whole mechanism, and it failed: six dispatched
+// commands drifted out of this list — `health` (the vitals entry point),
+// `journal`, `predictive-error`, `classify-durability`, `float-back`, `global`
+// — so `mnemos helth` suggested nothing at all. Nothing failed, because a
+// missing entry has no correctness consequence; it only degrades the error
+// message shown to a user who is already lost. Both directions are now a test
+// failure (cli_commands_guard_test.go), which is what "keep in sync" needed to
+// mean all along.
 var commands = []string{
 	"init", "setup", "doctor",
 	"mcp", "serve",
 	"ingest", "extract", "relate", "process", "claim",
 	"query", "entities", "extract-entities", "metrics", "quality", "curiosity", "audit",
+	"health", "journal", "predictive-error",
 	"decision", "action", "outcome", "incident",
 	"synthesize", "lessons", "playbook", "export", "import", "history",
 	"resolve", "trust", "verify", "reconsolidate",
 	"user", "token", "agent", "repo-tenant",
 	"registry", "push", "pull",
 	"reset", "delete-claim", "delete-event", "reembed", "recompute-trust", "recompute-contested",
-	"recompute-half-life", "prune", "dedup", "consolidate",
-	"sync-docs", "rebuild", "workspace", "hook",
+	"recompute-half-life", "classify-durability", "prune", "dedup", "consolidate",
+	"sync-docs", "rebuild", "workspace", "float-back", "global", "hook",
 }
 
 // suggestCommand returns the closest known command to input, or "" if none is close.
