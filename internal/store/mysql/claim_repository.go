@@ -27,10 +27,34 @@ type ClaimRepository struct {
 // Every column in the ON DUPLICATE KEY UPDATE set is rewritten from
 // whatever a read returned, so a column here that claimColumnNames omits
 // is silently zeroed by any read-modify-write pass.
+//
+// The scope, provenance and visibility columns all resolve a conflict with
+// "the incoming value wins ONLY when it carries one" rather than a plain
+// VALUES() assignment. The reason is #334's, generalised: no ingest path
+// produces any of these (extraction sets none of them), and every partial
+// writer — POST /v1/beliefs and the gRPC WriteBeliefs equivalent build a claim
+// field-by-field from a request whose scope, citation_count, last_executed and
+// provenance_rationale fields do not even exist — therefore carries a zero. A
+// blind VALUES() would let any such write silently ERASE a scope set by
+// markdown import or consolidate/promote, an audience set explicitly through
+// the API, or provenance that nothing can reconstruct. The reverse risk is
+// bounded and recoverable: a stale value is overwritten by supplying the new
+// one, since a non-empty incoming value always wins. Clearing a value back to
+// empty is not expressible through the upsert — as with verify_count, that
+// needs a statement that owns the column.
+//
+// This diverges from SQLite, which assigns these blindly and therefore still
+// carries the erase hazard. Mirroring the hazard for symmetry's sake was the
+// alternative, and #340 already set the precedent against it by declining to
+// copy Postgres's lifecycle rule to this backend.
 const claimUpsertSQL = `
 INSERT INTO claims (id, text, type, confidence, status, created_at, created_by, valid_from, trust_score, valid_to, half_life_days, subject_class, durability, confidence_components,
-                    test_id, test_requirement_ref, test_author, test_last_modified, test_last_run_at, test_pass_count, test_fail_count)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    test_id, test_requirement_ref, test_author, test_last_modified, test_last_run_at, test_pass_count, test_fail_count,
+                    scope_service, scope_env, scope_team,
+                    source_document, source_type, source_authority, liveness, last_executed, citation_count, provenance_rationale, visibility)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE
   text = VALUES(text),
   type = VALUES(type),
@@ -47,7 +71,18 @@ ON DUPLICATE KEY UPDATE
   test_last_modified = VALUES(test_last_modified),
   test_last_run_at = VALUES(test_last_run_at),
   test_pass_count = VALUES(test_pass_count),
-  test_fail_count = VALUES(test_fail_count)`
+  test_fail_count = VALUES(test_fail_count),
+  scope_service = CASE WHEN VALUES(scope_service) <> '' THEN VALUES(scope_service) ELSE scope_service END,
+  scope_env = CASE WHEN VALUES(scope_env) <> '' THEN VALUES(scope_env) ELSE scope_env END,
+  scope_team = CASE WHEN VALUES(scope_team) <> '' THEN VALUES(scope_team) ELSE scope_team END,
+  source_document = CASE WHEN VALUES(source_document) <> '' THEN VALUES(source_document) ELSE source_document END,
+  source_type = CASE WHEN VALUES(source_type) <> '' THEN VALUES(source_type) ELSE source_type END,
+  source_authority = CASE WHEN VALUES(source_authority) > 0 THEN VALUES(source_authority) ELSE source_authority END,
+  liveness = CASE WHEN VALUES(liveness) <> '' THEN VALUES(liveness) ELSE liveness END,
+  last_executed = CASE WHEN VALUES(last_executed) IS NOT NULL THEN VALUES(last_executed) ELSE last_executed END,
+  citation_count = CASE WHEN VALUES(citation_count) > 0 THEN VALUES(citation_count) ELSE citation_count END,
+  provenance_rationale = CASE WHEN VALUES(provenance_rationale) <> '' THEN VALUES(provenance_rationale) ELSE provenance_rationale END,
+  visibility = CASE WHEN VALUES(visibility) <> '' THEN VALUES(visibility) ELSE visibility END`
 
 // Upsert is the no-reason variant; status_history rows lose their
 // reason/changed_by attribution.
@@ -104,6 +139,18 @@ VALUES (?, ?, ?, ?, ?, ?)`
 			claim.TestID, claim.TestRequirementRef, claim.TestAuthor,
 			nullTime(claim.TestLastModified), nullTime(claim.TestLastRunAt),
 			claim.TestPassCount, claim.TestFailCount,
+			claim.Scope.Service, claim.Scope.Env, claim.Scope.Team,
+			claim.SourceDocument, string(claim.SourceType), claim.SourceAuthority,
+			string(claim.Liveness), nullTime(claim.LastExecuted), claim.CitationCount,
+			claim.ProvenanceRationale,
+			// Visibility is bound RAW, not normalised to the default the way
+			// SQLite does on write. Normalising here would make "unset" and
+			// "explicitly team" the same string, and the conflict rule above
+			// distinguishes exactly those two: an unset audience must preserve a
+			// stored 'personal', an explicit 'team' must override it. The read
+			// side normalises instead (see scanClaimRow), so no caller ever sees
+			// an empty audience.
+			string(claim.Visibility),
 		); err != nil {
 			return fmt.Errorf("upsert claim %s: %w", claim.ID, err)
 		}
@@ -653,6 +700,9 @@ var claimColumnNames = []string{
 	"confidence_components",
 	"test_id", "test_requirement_ref", "test_author", "test_last_modified",
 	"test_last_run_at", "test_pass_count", "test_fail_count",
+	"scope_service", "scope_env", "scope_team",
+	"source_document", "source_type", "source_authority", "liveness",
+	"last_executed", "citation_count", "provenance_rationale", "visibility",
 }
 
 // claimColumns renders the shared projection, optionally table-qualified
@@ -669,6 +719,22 @@ func claimColumns(alias string) string {
 	return strings.Join(cols, ", ")
 }
 
+// visibilityOrDefault normalises a stored audience the way SQLite's column
+// default and the memory backend both do: empty (a row written before the
+// column existed, or by a caller that expressed no audience) and any
+// unrecognised value present as domain.DefaultVisibility. A read must never
+// hand back an empty audience — query.admission would coerce it anyway, and an
+// empty value at the store boundary makes "team" and "never set"
+// indistinguishable, which is the ambiguity that let #331 and #335 survive.
+func visibilityOrDefault(v domain.Visibility) domain.Visibility {
+	switch v {
+	case domain.VisibilityPersonal, domain.VisibilityTeam, domain.VisibilityOrg:
+		return v
+	default:
+		return domain.DefaultVisibility
+	}
+}
+
 func collectClaimRows(rows *sql.Rows) ([]domain.Claim, error) {
 	out := make([]domain.Claim, 0)
 	for rows.Next() {
@@ -683,7 +749,16 @@ func collectClaimRows(rows *sql.Rows) ([]domain.Claim, error) {
 
 func scanClaimRow(rows *sql.Rows) (domain.Claim, error) {
 	var c domain.Claim
-	var typ, status, lifecycle, subjectClass, durability, confidenceComponents string
+	var typ, status, lifecycle, subjectClass, durability string
+	// confidence_components is `JSON NULL` with no default on this backend —
+	// unlike Postgres, where it is NOT NULL DEFAULT '{}'. Every row mnemos
+	// writes carries a value, but a row that predates the ALTER holds SQL NULL,
+	// and scanning that into a plain string fails the whole read with
+	// "converting NULL to string is unsupported". The claim is not degraded,
+	// it is UNREADABLE — so an upgraded MySQL brain lost every claim written
+	// before the column existed. NullString decodes NULL as "no decomposition
+	// available", which is what decodeConfidenceComponents already means by "".
+	var confidenceComponents sql.NullString
 	var validFrom sql.NullTime
 	var validTo sql.NullTime
 	// last_verified is NULL until the first MarkVerified, and NULL is the
@@ -691,11 +766,21 @@ func scanClaimRow(rows *sql.Rows) (domain.Claim, error) {
 	// keeps the zero time rather than inventing an instant.
 	var lastVerified sql.NullTime
 	var testLastModified, testLastRunAt sql.NullTime
+	var scopeService, scopeEnv, scopeTeam string
+	var sourceDocument, sourceType, liveness, provenanceRationale, visibility string
+	// last_executed is NULL until something records an execution, and NULL is
+	// the cross-backend "never executed" sentinel trust.EvaluateLiveness reads
+	// as unknown — scanning it into a NullTime keeps the zero time rather than
+	// inventing an instant that would read as decades of decay.
+	var lastExecuted sql.NullTime
 	if err := rows.Scan(
 		&c.ID, &c.Text, &typ, &c.Confidence, &status,
 		&c.CreatedAt, &c.CreatedBy, &c.TrustScore, &validFrom, &validTo, &lastVerified, &c.VerifyCount,
 		&c.HalfLifeDays, &lifecycle, &subjectClass, &durability, &confidenceComponents,
 		&c.TestID, &c.TestRequirementRef, &c.TestAuthor, &testLastModified, &testLastRunAt, &c.TestPassCount, &c.TestFailCount,
+		&scopeService, &scopeEnv, &scopeTeam,
+		&sourceDocument, &sourceType, &c.SourceAuthority, &liveness,
+		&lastExecuted, &c.CitationCount, &provenanceRationale, &visibility,
 	); err != nil {
 		return domain.Claim{}, fmt.Errorf("scan claim row: %w", err)
 	}
@@ -704,7 +789,16 @@ func scanClaimRow(rows *sql.Rows) (domain.Claim, error) {
 	c.Lifecycle = domain.ClaimLifecycle(lifecycle)
 	c.SubjectClass = domain.SubjectClass(subjectClass)
 	c.Durability = domain.Durability(durability)
-	c.ConfidenceComponents = decodeConfidenceComponents(confidenceComponents)
+	c.ConfidenceComponents = decodeConfidenceComponents(confidenceComponents.String)
+	c.Scope = domain.Scope{Service: scopeService, Env: scopeEnv, Team: scopeTeam}
+	c.SourceDocument = sourceDocument
+	c.SourceType = domain.SourceType(sourceType)
+	c.Liveness = domain.LivenessStatus(liveness)
+	c.ProvenanceRationale = provenanceRationale
+	c.Visibility = visibilityOrDefault(domain.Visibility(visibility))
+	if lastExecuted.Valid {
+		c.LastExecuted = lastExecuted.Time
+	}
 	if validFrom.Valid {
 		c.ValidFrom = validFrom.Time
 	}

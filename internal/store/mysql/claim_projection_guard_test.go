@@ -46,12 +46,11 @@ func sqliteClaimColumns(t *testing.T) []string {
 
 // unreadColumns are declared on the MySQL claims table and deliberately absent
 // from claimColumnNames.
-var unreadColumns = map[string]string{
-	"scope_service": "Claim.Scope is neither written nor read by this backend — #338. " +
-		"Reading it without also writing it would only ever return the column default.",
-	"scope_env":  "Same as scope_service — #338.",
-	"scope_team": "Same as scope_service — #338.",
-}
+//
+// Empty since #338 closed: every column this backend declares is read back.
+// The map stays as the documented place to record a deliberate omission —
+// with a reason, which an empty string is not.
+var unreadColumns = map[string]string{}
 
 // unwrittenColumns are read back by claimColumnNames and deliberately absent
 // from the claim upsert's INSERT column list, because another statement owns
@@ -70,16 +69,11 @@ var unwrittenColumns = map[string]string{
 
 // undeclaredColumns exist on the SQLite claims table and not in the MySQL
 // schema at all. Each one is a value a brain hosted here cannot persist.
-var undeclaredColumns = map[string]string{
-	"source_document":      "Epistemic-provenance column never added to this backend — #339.",
-	"source_type":          "Epistemic-provenance column never added to this backend — #339.",
-	"source_authority":     "Epistemic-provenance column never added to this backend — #339.",
-	"liveness":             "Epistemic-provenance column never added to this backend — #339.",
-	"last_executed":        "Epistemic-provenance column never added to this backend — #339. Feeds trust.EffectiveExecutionTime.",
-	"citation_count":       "Epistemic-provenance column never added to this backend — #339. Feeds the credibility corroboration signal.",
-	"provenance_rationale": "Epistemic-provenance column never added to this backend — #339.",
-	"visibility":           "Audience gate never added to this backend — #339. query.admission treats the missing value as 'team'.",
-}
+//
+// Empty since #338/#339 closed: every SQLite claims column is now declared
+// here. The map stays as the documented place to record a deliberate
+// divergence — with a reason, which an empty string is not.
+var undeclaredColumns = map[string]string{}
 
 // Every column this backend declares must be in the read projection.
 //
