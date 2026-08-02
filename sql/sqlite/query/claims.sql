@@ -3,8 +3,20 @@
 -- separately via UpdateClaimTrust and SetClaimValidity), but does
 -- refresh valid_from: re-extracting a claim with newer evidence is
 -- a legitimate "this fact is observed again from <ts>" signal.
-INSERT INTO claims (id, text, type, confidence, status, created_at, created_by, valid_from, scope_service, scope_env, scope_team, source_document, source_type, source_authority, liveness, last_executed, citation_count, provenance_rationale, test_id, test_requirement_ref, test_author, test_last_modified, test_last_run_at, test_pass_count, test_fail_count, visibility, confidence_components, lifecycle, subject_class, durability)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+--
+-- half_life_days is written on INSERT because the ingest pipeline
+-- classifies claim volatility and stamps a shorter freshness half-life
+-- on assertions about mutable system state. Omitting it here dropped
+-- that classification at the store boundary, so every row in existence
+-- kept the DEFAULT 0 and decayed at the 90-day durable default (#331).
+--
+-- On CONFLICT the incoming value only wins when non-zero. A re-extracted
+-- claim carries no half-life (the classifier returns 0 for anything it is
+-- not confident about), so a plain excluded.half_life_days would reset a
+-- human override set through MarkVerified the next time the same claim
+-- came back through ingest. Same COALESCE semantics as MarkClaimVerified.
+INSERT INTO claims (id, text, type, confidence, status, created_at, created_by, valid_from, half_life_days, scope_service, scope_env, scope_team, source_document, source_type, source_authority, liveness, last_executed, citation_count, provenance_rationale, test_id, test_requirement_ref, test_author, test_last_modified, test_last_run_at, test_pass_count, test_fail_count, visibility, confidence_components, lifecycle, subject_class, durability)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   text = excluded.text,
   type = excluded.type,
@@ -13,6 +25,7 @@ ON CONFLICT(id) DO UPDATE SET
   created_at = excluded.created_at,
   created_by = excluded.created_by,
   valid_from = excluded.valid_from,
+  half_life_days = CASE WHEN excluded.half_life_days > 0 THEN excluded.half_life_days ELSE claims.half_life_days END,
   scope_service = excluded.scope_service,
   scope_env = excluded.scope_env,
   scope_team = excluded.scope_team,
