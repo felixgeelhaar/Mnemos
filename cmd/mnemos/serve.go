@@ -85,6 +85,10 @@ func handleServe(args []string, _ Flags) {
 	publicReads := false   // secure by default: GET reads require a token unless opted in
 	metricsPublic := false // secure by default: /internal/metrics requires a token unless opted in
 	trustProxy := false    // secure by default: X-Forwarded-For is not believed
+	// -1 = the flag was not given, so MNEMOS_CONSOLIDATE_INTERVAL / the default
+	// decides. 0 given explicitly disables the cycle, which is why "unset" needs
+	// a value of its own.
+	consolidateEvery := time.Duration(-1)
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--require-tenant":
@@ -118,6 +122,18 @@ func handleServe(args []string, _ Flags) {
 				return
 			}
 			grpcPort = p
+			i++
+		case "--consolidate-interval":
+			if i+1 >= len(args) {
+				exitWithMnemosError(false, NewUserError("--consolidate-interval requires a value (Go duration, e.g. 20h; 0 disables)"))
+				return
+			}
+			d, err := parseConsolidateIntervalValue(args[i+1])
+			if err != nil {
+				exitWithMnemosError(false, err)
+				return
+			}
+			consolidateEvery = d
 			i++
 		default:
 			exitWithMnemosError(false, NewUserError("unknown serve flag %q", args[i]))
@@ -212,6 +228,15 @@ func handleServe(args []string, _ Flags) {
 	samplerCtx, stopSampler := context.WithCancel(context.Background())
 	defer stopSampler()
 	startProductMetricsSampler(samplerCtx, conn, mem, metricsSampleInterval(), newStderrLogger())
+
+	// The hosted brain's sleep cycle (serve_sleep.go). Without it `serve` runs
+	// indefinitely and consolidates never: the local brain sleeps on a session
+	// hook that a server never receives, so narration accumulated and dissonance
+	// only ever ratcheted up. Failure-isolated — a consolidation error is logged
+	// and the server keeps serving.
+	sleepCtx, stopSleep := context.WithCancel(context.Background())
+	defer stopSleep()
+	startConsolidationCycle(sleepCtx, consolidateEveryFor(consolidateEvery), requireTenant, newStderrLogger())
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", port),

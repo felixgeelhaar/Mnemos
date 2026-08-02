@@ -50,6 +50,15 @@ serve:
   # endpoint requires a JWT, reads included.
   public_reads:        # MNEMOS_PUBLIC_READS (bool, default false — allow anonymous GET/HEAD/OPTIONS)
   metrics_public:      # MNEMOS_METRICS_PUBLIC (bool, default false — unauthenticate /internal/metrics)
+  # The hosted brain's sleep cycle: how often a running server consolidates
+  # (dedupe, trust refresh, credit assignment, the skill loop, and the LLM
+  # session-noise clearing that keeps dissonance from ratcheting up). Defaults to
+  # the same ~daily gap the local brain sleeps on. One pass also runs a couple of
+  # minutes after boot, so a server restarted daily still consolidates daily.
+  # The cycle is PER PROCESS — with several replicas on one store, set 0 on all
+  # but one. Under --require-tenant every tenant partition is consolidated
+  # separately, under its own scope.
+  consolidate_interval: # MNEMOS_CONSOLIDATE_INTERVAL (Go duration, default 20h; 0 disables)
 
 # Point a CLIENT (e.g. the recall/brief/capture hooks) at a remote hosted brain.
 # Written by `mnemos init --url <endpoint> [--token]`. When server.url is set, the
