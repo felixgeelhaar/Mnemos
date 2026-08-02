@@ -18,8 +18,14 @@ data/eval/
 ├── real_world.yaml               # Real document tests (8 cases)
 ├── robustness.yaml               # Noisy/messy input tests (10 cases)
 ├── relationship_detection.yaml   # Relate engine eval (12 cases)
-└── llm_extraction.yaml           # LLM extraction tests (requires API key)
+├── llm_extraction.yaml           # LLM extraction tests (requires API key)
+├── retrieval.yaml                # Ranker comparison, MRR per strategy
+└── brainbench/                   # Cognitive-process A/B experiments (see below)
 ```
+
+The `*.yaml` files in this directory are **component** evals: given this input,
+did the extractor / relater / ranker produce the right output? `brainbench/` is a
+different unit of work and is run by a different command — see below.
 
 ## Running the Evaluation
 
@@ -68,6 +74,23 @@ MNEMOS_LLM_PROVIDER=openai MNEMOS_LLM_API_KEY=... go test ./data/eval/ -run Test
 ### Strict Tests (TestAllCases)
 - Exact-match validation for clean inputs
 - Covers: claim types, deduplication, contested detection, confidence scoring, edge cases, boundaries, real-world documents
+
+### Cognitive-process benefit (brainbench/)
+
+Everything above measures a component in isolation. `brainbench/` measures
+something the component evals structurally cannot: whether the continuous
+cognitive processes (consolidate, forget, reinforce, credit, salience,
+synthesize, decay) actually **improve** a brain — by seeding two byte-identical
+brains, running the process set on one, and diffing the outcomes.
+
+```bash
+make brain-eval          # human table + machine-readable brainbench.json
+make brain-eval-strict   # exit 1 if any scored metric degraded
+```
+
+It is a separate command, not part of `make test`, because each scenario seeds
+and measures four SQLite brains. See `brainbench/README.md` for the method, the
+metric directions, and — importantly — the list of what it does not measure.
 
 ## Adding New Tests
 
