@@ -20,6 +20,40 @@ type ClaimRepository struct {
 	ns string
 }
 
+// claimUpsertSQL is the claim write statement, namespace-qualified.
+//
+// It lives in its own function so the projection guard
+// (TestClaimProjection_* in claim_projection_guard_test.go) can parse the
+// statement the repository actually executes rather than a copy that
+// would drift from it — the very failure mode the guard exists to catch.
+// Every column in the ON CONFLICT set is rewritten from whatever a read
+// returned, so a column here that claimColumnNames omits is silently
+// zeroed by any read-modify-write pass.
+func claimUpsertSQL(ns string) string {
+	return fmt.Sprintf(`
+INSERT INTO %s (id, text, type, confidence, status, created_at, created_by, valid_from, trust_score, valid_to, half_life_days, lifecycle, subject_class, durability, confidence_components,
+                test_id, test_requirement_ref, test_author, test_last_modified, test_last_run_at, test_pass_count, test_fail_count)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, NULL, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+ON CONFLICT (id) DO UPDATE SET
+  text = EXCLUDED.text,
+  type = EXCLUDED.type,
+  confidence = EXCLUDED.confidence,
+  status = EXCLUDED.status,
+  valid_from = EXCLUDED.valid_from,
+  half_life_days = CASE WHEN EXCLUDED.half_life_days > 0 THEN EXCLUDED.half_life_days ELSE claims.half_life_days END,
+  lifecycle = EXCLUDED.lifecycle,
+  subject_class = EXCLUDED.subject_class,
+  durability = EXCLUDED.durability,
+  confidence_components = EXCLUDED.confidence_components,
+  test_id = EXCLUDED.test_id,
+  test_requirement_ref = EXCLUDED.test_requirement_ref,
+  test_author = EXCLUDED.test_author,
+  test_last_modified = EXCLUDED.test_last_modified,
+  test_last_run_at = EXCLUDED.test_last_run_at,
+  test_pass_count = EXCLUDED.test_pass_count,
+  test_fail_count = EXCLUDED.test_fail_count`, qualify(ns, "claims"))
+}
+
 // Upsert satisfies the corresponding ports method.
 func (r ClaimRepository) Upsert(ctx context.Context, claims []domain.Claim) error {
 	return r.upsertWithReason(ctx, claims, "", "")
@@ -47,28 +81,7 @@ func (r ClaimRepository) upsertWithReason(ctx context.Context, claims []domain.C
 	defer func() { _ = tx.Rollback() }()
 
 	now := time.Now().UTC()
-	upsert := fmt.Sprintf(`
-INSERT INTO %s (id, text, type, confidence, status, created_at, created_by, valid_from, trust_score, valid_to, half_life_days, lifecycle, subject_class, durability, confidence_components,
-                test_id, test_requirement_ref, test_author, test_last_modified, test_last_run_at, test_pass_count, test_fail_count)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, NULL, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
-ON CONFLICT (id) DO UPDATE SET
-  text = EXCLUDED.text,
-  type = EXCLUDED.type,
-  confidence = EXCLUDED.confidence,
-  status = EXCLUDED.status,
-  valid_from = EXCLUDED.valid_from,
-  half_life_days = CASE WHEN EXCLUDED.half_life_days > 0 THEN EXCLUDED.half_life_days ELSE claims.half_life_days END,
-  lifecycle = EXCLUDED.lifecycle,
-  subject_class = EXCLUDED.subject_class,
-  durability = EXCLUDED.durability,
-  confidence_components = EXCLUDED.confidence_components,
-  test_id = EXCLUDED.test_id,
-  test_requirement_ref = EXCLUDED.test_requirement_ref,
-  test_author = EXCLUDED.test_author,
-  test_last_modified = EXCLUDED.test_last_modified,
-  test_last_run_at = EXCLUDED.test_last_run_at,
-  test_pass_count = EXCLUDED.test_pass_count,
-  test_fail_count = EXCLUDED.test_fail_count`, qualify(r.ns, "claims"))
+	upsert := claimUpsertSQL(r.ns)
 	historyInsert := fmt.Sprintf(`
 INSERT INTO %s (claim_id, from_status, to_status, changed_at, reason, changed_by)
 VALUES ($1, $2, $3, $4, $5, $6)`, qualify(r.ns, "claim_status_history"))
@@ -657,9 +670,16 @@ func nullTime(t time.Time) any {
 // step with the scanner (ListClaimsForEntity omitted `durability` and failed at
 // Scan with an arity mismatch), so the list lives in one place and every reader
 // goes through claimColumns.
+//
+// Being the one projection is not by itself a guard: the list is still
+// hand-maintained, and it has silently omitted columns the schema declares
+// twice (#331/#334, #335). claim_projection_guard_test.go now diffs it against
+// the embedded DDL, the claim upsert's INSERT list and its ON CONFLICT set, so
+// an omission fails a test instead of zeroing production rows.
 var claimColumnNames = []string{
 	"id", "text", "type", "confidence", "status", "created_at", "created_by",
-	"trust_score", "valid_from", "valid_to", "half_life_days", "lifecycle", "subject_class",
+	"trust_score", "valid_from", "valid_to", "last_verified", "verify_count",
+	"half_life_days", "lifecycle", "subject_class",
 	"durability", "confidence_components",
 	"test_id", "test_requirement_ref", "test_author", "test_last_modified",
 	"test_last_run_at", "test_pass_count", "test_fail_count",
@@ -696,10 +716,15 @@ func scanClaimRow(rows *sql.Rows) (domain.Claim, error) {
 	var typ, status, lifecycle, subjectClass, durability, confidenceComponents string
 	var validFrom sql.NullTime
 	var validTo sql.NullTime
+	// last_verified is NULL until the first MarkVerified, and NULL is the
+	// cross-backend "never verified" sentinel — scanning it into a NullTime
+	// keeps the zero time rather than inventing an instant.
+	var lastVerified sql.NullTime
 	var testLastModified, testLastRunAt sql.NullTime
 	if err := rows.Scan(
 		&c.ID, &c.Text, &typ, &c.Confidence, &status,
-		&c.CreatedAt, &c.CreatedBy, &c.TrustScore, &validFrom, &validTo, &c.HalfLifeDays, &lifecycle, &subjectClass, &durability, &confidenceComponents,
+		&c.CreatedAt, &c.CreatedBy, &c.TrustScore, &validFrom, &validTo, &lastVerified, &c.VerifyCount,
+		&c.HalfLifeDays, &lifecycle, &subjectClass, &durability, &confidenceComponents,
 		&c.TestID, &c.TestRequirementRef, &c.TestAuthor, &testLastModified, &testLastRunAt, &c.TestPassCount, &c.TestFailCount,
 	); err != nil {
 		return domain.Claim{}, fmt.Errorf("scan claim row: %w", err)
@@ -715,6 +740,9 @@ func scanClaimRow(rows *sql.Rows) (domain.Claim, error) {
 	}
 	if validTo.Valid {
 		c.ValidTo = validTo.Time
+	}
+	if lastVerified.Valid {
+		c.LastVerified = lastVerified.Time
 	}
 	if testLastModified.Valid {
 		c.TestLastModified = testLastModified.Time

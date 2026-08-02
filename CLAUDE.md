@@ -164,6 +164,19 @@ After modifying SQL queries in `sql/sqlite/query/*.sql`, run `make sqlc` to rege
 
 Embeddings are stored as little-endian float32 binary BLOBs, encoded/decoded via `EncodeVector`/`DecodeVector` in `internal/embedding/`.
 
+### Adding a claims column — the projection-drift guard
+
+**A hand-written backend silently drops any column its projection does not name, and nothing fails.** Postgres and MySQL each keep ONE hand-maintained claim projection (`claimColumnNames`) plus a hand-written upsert. The list drifted from the schema twice — #331/#334 (`half_life_days` missing from the write path, discarded on every backend for the life of the product) and #335 (`last_verified` / `verify_count` missing from both read projections, disabling recall-based trust refresh and the salience floor that protects beliefs from being forgotten, so a hosted brain forgot what a local SQLite brain kept). Neither was caught by a test, because every affected code path *succeeds*: a write that never persists a column still commits, and a read that never selects one still scans and hands back a zero indistinguishable from "never set". SQLite is immune only because its reads are sqlc-**generated** — an omitted column fails to compile.
+
+`internal/store/schemaguard` + `claim_projection_guard_test.go` in each backend make this a test failure. Four directions, all from static analysis of the embedded `schema.sql` and the real statement builders (`claimUpsertSQL`) — no container, so it runs in `make check` and in CI, which is the point: the two hand-written backends are exactly the two whose integration tests skip without `TEST_POSTGRES_DSN` / `TEST_MYSQL_DSN`.
+
+1. every declared column is read (#335's direction);
+2. every column in the `ON CONFLICT` / `ON DUPLICATE KEY UPDATE` set is read — a column written on conflict but not read is **zeroed across every row** touched by the read-modify-write passes (`recompute-half-life`, `prune --narration`, `recompute-contested`);
+3. every read column is written by the INSERT (#331's direction);
+4. every SQLite column is declared at all (cross-backend divergence: #338 scope, #339 provenance/visibility).
+
+Deliberate omissions go in the per-backend allowlists **with a reason** — an entry with an empty reason excuses nothing, and an entry that stops being needed fails the guard as stale, so an excuse cannot outlive the thing it excuses. When adding a claims column, add it to the DDL, the INSERT list, the conflict set, `claimColumnNames` and `scanClaimRow` on both backends — or allowlist it and say why. Assert the round trip on what the **store returns** (`internal/store/claim_verification_parity_test.go`), never on what the write call was handed: a write-path test is exactly what passed throughout #331 and #335.
+
 ### Adding a new Postgres table — RLS gotcha (per-tenant isolation)
 
 **A new Postgres table LEAKS across tenants unless you register it in the ADR-0007 RLS `scoped` array in `internal/store/postgres/schema.sql` — not just its `CREATE TABLE`.** Per-tenant isolation within a namespace is applied by the `DO $mnemos_rls$` block, which iterates a `scoped text[]` list and, for each table, adds a `tenant` column (defaulted from the `mnemos.tenant` GUC), a tenant index, and a `FORCE ROW LEVEL SECURITY` `tenant_isolation` policy. A table absent from that list gets **no** tenant column and **no** policy, so every tenant sees every row. When you add a table used across tenants (side tables like `working_memory_blocks`, `claim_expectations` did this), add its name to `scoped`. Auth-infra tables (`users`, `revoked_tokens`) are deliberately excluded. Verify with the live-Postgres integration test (a fresh namespace should isolate).
