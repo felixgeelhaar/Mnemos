@@ -26,16 +26,28 @@ ON CONFLICT(id) DO UPDATE SET
   created_by = excluded.created_by,
   valid_from = excluded.valid_from,
   half_life_days = CASE WHEN excluded.half_life_days > 0 THEN excluded.half_life_days ELSE claims.half_life_days END,
-  scope_service = excluded.scope_service,
-  scope_env = excluded.scope_env,
-  scope_team = excluded.scope_team,
-  source_document = excluded.source_document,
-  source_type = excluded.source_type,
-  source_authority = excluded.source_authority,
-  liveness = excluded.liveness,
-  last_executed = excluded.last_executed,
-  citation_count = excluded.citation_count,
-  provenance_rationale = excluded.provenance_rationale,
+  -- Scope, provenance and visibility are PRESERVED when the incoming value is
+  -- zero, generalising the half_life_days rule above (#334, #345, #346).
+  --
+  -- No ingest path produces any of these. The writers that can hit an existing
+  -- claim id -- POST /v1/beliefs and gRPC WriteBeliefs -- build a Claim from a
+  -- request with no scope, visibility, citation_count, last_executed or
+  -- provenance_rationale field at all, so a blind `= excluded.x` lets a partial
+  -- write erase curation that nothing can reconstruct. An explicit value still
+  -- always wins, so nothing becomes uncorrectable.
+  scope_service = CASE WHEN excluded.scope_service <> '' THEN excluded.scope_service ELSE claims.scope_service END,
+  scope_env = CASE WHEN excluded.scope_env <> '' THEN excluded.scope_env ELSE claims.scope_env END,
+  scope_team = CASE WHEN excluded.scope_team <> '' THEN excluded.scope_team ELSE claims.scope_team END,
+  source_document = CASE WHEN excluded.source_document <> '' THEN excluded.source_document ELSE claims.source_document END,
+  source_type = CASE WHEN excluded.source_type <> '' THEN excluded.source_type ELSE claims.source_type END,
+  source_authority = CASE WHEN excluded.source_authority > 0 THEN excluded.source_authority ELSE claims.source_authority END,
+  liveness = CASE WHEN excluded.liveness <> '' THEN excluded.liveness ELSE claims.liveness END,
+  -- `<> ''` rather than the `IS NOT NULL` the hosted backends use: this backend
+  -- stores last_executed as an RFC3339 STRING and writes the empty string for a
+  -- zero time, so it is never NULL and an IS NOT NULL test would always fire.
+  last_executed = CASE WHEN excluded.last_executed <> '' THEN excluded.last_executed ELSE claims.last_executed END,
+  citation_count = CASE WHEN excluded.citation_count > 0 THEN excluded.citation_count ELSE claims.citation_count END,
+  provenance_rationale = CASE WHEN excluded.provenance_rationale <> '' THEN excluded.provenance_rationale ELSE claims.provenance_rationale END,
   test_id = excluded.test_id,
   test_requirement_ref = excluded.test_requirement_ref,
   test_author = excluded.test_author,
@@ -43,7 +55,11 @@ ON CONFLICT(id) DO UPDATE SET
   test_last_run_at = excluded.test_last_run_at,
   test_pass_count = excluded.test_pass_count,
   test_fail_count = excluded.test_fail_count,
-  visibility = excluded.visibility,
+  -- Requires the write path to bind visibility RAW rather than normalised to
+  -- "team": normalising makes "unset" and "explicitly team" the same string, and
+  -- this rule has to tell them apart. Reads still normalise, so an empty stored
+  -- value presents as the default and no existing row changes meaning.
+  visibility = CASE WHEN excluded.visibility <> '' THEN excluded.visibility ELSE claims.visibility END,
   confidence_components = excluded.confidence_components,
   lifecycle = excluded.lifecycle,
   subject_class = excluded.subject_class,
