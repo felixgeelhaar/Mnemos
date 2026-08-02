@@ -373,6 +373,8 @@ Two explicit opt-outs, both off by default:
 
 `/internal/metrics` and the readiness probe `/internal/ready` (version + DB write check) are authenticated by default; `/internal/ready` has no public opt-out.
 
+**The server sleeps.** A running `mnemos serve` consolidates on a cycle — the hosted counterpart of the local brain's session-start sleep. It runs one pass a couple of minutes after boot (so a server restarted daily still consolidates daily) and then every `MNEMOS_CONSOLIDATE_INTERVAL` (`serve --consolidate-interval`, `serve.consolidate_interval`; default `20h`, `0` disables). The pass is the same one the local brain runs: dedupe, trust refresh, credit assignment, the lesson/playbook skill loop, decay, the journal, and — when an LLM is configured — the session-noise clearing that keeps dissonance from ratcheting one way. Under `--require-tenant` every tenant partition is consolidated separately under its own scope. Consolidation is failure-isolated: an error is logged and the server keeps serving. The cycle is per process, so with several replicas against one store set the interval to `0` on all but one.
+
 Writes additionally check the token's `scp` claim (`events:write`, `claims:write`, `relationships:write`, `embeddings:write`, `promote:global`, or `*`) — see the Auth column above. The same per-tool scope gate applies to `mnemos mcp --http`.
 
 The signing key comes from `MNEMOS_JWT_SECRET` (hex-encoded, ≥ 32 bytes) or `MNEMOS_AUTH_DIR/jwt-secret` (auto-created on first boot, 0600); boot fails loudly if neither resolves. Issue tokens with `mnemos token issue`; revoke with `mnemos token revoke`.
