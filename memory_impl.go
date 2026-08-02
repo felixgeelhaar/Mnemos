@@ -1063,8 +1063,10 @@ func (m *memory) Consolidate(ctx context.Context, opts ConsolidateOptions) (Cons
 	}
 	// Active forgetting: prune stale, low-trust, non-promoted claims — the
 	// offline synaptic renormalisation the brain does during sleep. Reduced
-	// retrievability, not erasure (marked deprecated, history preserved). A memory in
-	// the replay set is protected (ADR 0015 §3).
+	// retrievability, not erasure: valid-time is closed and the history kept.
+	// Status is NOT touched — see ConsolidateOptions.ForgetBelowTrust for why
+	// that distinction has already misled two subsystems. A memory in the replay
+	// set is protected (ADR 0015 §3).
 	if opts.ForgetBelowTrust > 0 {
 		forgotten, protectedSkipped, ferr := m.forgetStaleClaims(ctx, opts.ForgetBelowTrust, replayProtected)
 		if ferr != nil {
@@ -1791,9 +1793,6 @@ func (m *memory) forgetRefutedClaims(ctx context.Context) (int, error) {
 	return n, nil
 }
 
-// forgetStaleClaims invalidates non-promoted claims whose trust is below the
-// floor by setting their valid-to to now — so recall (which filters by valid
-// time) stops surfacing them, while the claim + its history are preserved (a
 // salienceProtectFloor is the intrinsic-importance threshold above which a claim
 // is kept by forgetStaleClaims even when its trust has fallen below the forget
 // floor. Tuned so only genuinely consequential claims (a decision, or a well-
@@ -1801,11 +1800,25 @@ func (m *memory) forgetRefutedClaims(ctx context.Context) (int, error) {
 // while the low-confidence, single-source, unverified tail is still let go.
 const salienceProtectFloor = 0.66
 
+// forgetStaleClaims invalidates non-promoted claims whose trust is below the
+// floor by setting their valid-to to now — so recall (which filters by valid
+// time) stops surfacing them, while the claim + its history are preserved (a
 // point-in-time query can still see what was once believed). This is forgetting
-// as reduced retrievability, not erasure. Promoted (human-endorsed) claims are
-// never forgotten, regardless of decay. Already-invalidated claims are skipped.
-// Intrinsically salient claims are also protected — see the salience gate below —
-// as are claims in the same pass's replay set (protected, ADR 0015 §3), passed in.
+// as reduced retrievability, not erasure. Status is NOT touched: a swept claim
+// stays `active`, and deprecation is a different mechanism entirely — see
+// ConsolidateOptions.ForgetBelowTrust.
+//
+// This comment used to be SPLIT IN HALF by the const above, breaking mid-sentence
+// at "…preserved (a" and resuming after the declaration. Go therefore attached
+// only the second half to this function, and the accurate description of the
+// mechanism was unreadable where anyone would look for it. Two other comments
+// then described forgetting as "marked deprecated" — the plausible route by which
+// that error spread. Keep this contiguous.
+//
+// Promoted (human-endorsed) claims are never forgotten, regardless of decay.
+// Already-invalidated claims are skipped. Intrinsically salient claims are also
+// protected — see the salience gate below — as are claims in the same pass's
+// replay set (protected, ADR 0015 §3), passed in.
 // Returns (forgotten, protectedSkipped): the second counts claims that WOULD have
 // been forgotten but were spared by the replay-set protection.
 func (m *memory) forgetStaleClaims(ctx context.Context, belowTrust float64, protected map[string]bool) (int, int, error) {

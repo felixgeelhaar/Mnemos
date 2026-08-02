@@ -641,9 +641,25 @@ type ConsolidateOptions struct {
 	// strictly below this floor — the brain's offline pruning: a memory that has
 	// decayed (low confidence × corroboration × freshness) and is no longer
 	// reinforced stops surfacing. Forgetting is reduced retrievability, NOT
-	// erasure: the claim is marked deprecated (excluded from recall) with its
-	// history preserved. PROMOTED (human-endorsed) claims are NEVER forgotten,
-	// regardless of trust. 0 (the default) disables forgetting — dedupe only.
+	// erasure: valid-time is closed (SetValidity) and the history is kept. Status
+	// is NOT touched — a swept claim stays `active`. PROMOTED (human-endorsed)
+	// claims are NEVER forgotten, regardless of trust. 0 (the default) disables
+	// forgetting — dedupe only.
+	//
+	// Automatic forgetting and deprecation are two DIFFERENT mechanisms, and this
+	// comment said "marked deprecated" for long enough to mislead an ADR's gap
+	// analysis and to cause a real measurement bug in the evaluation harness,
+	// whose census counted Status and so read a pass reporting `forgotten: 4` as
+	// zero movement. They are orthogonal:
+	//
+	//	valid-time closure   automatic sweeps (here, ForgetRefuted, supersedes, TTL)
+	//	Status → deprecated  deliberate acts (MCP forget, memory_deprecate,
+	//	                     contradiction losers, prune --narration, tombstones)
+	//
+	// They are also not equally hard to escape, which matters when reasoning about
+	// recall: the valid-time filter sits behind `IncludeHistory`, so `--at` and
+	// `--include-history` see through it, whereas excludeDeprecated has no bypass
+	// at all (internal/query/admission.go). A swept claim is the SOFTER retirement.
 	ForgetBelowTrust float64
 
 	// ForgetRefuted actively forgets claims that an observed outcome later REFUTED
