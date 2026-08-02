@@ -1,0 +1,82 @@
+# Does forgetting help a brain carrying stale, superseded facts?
+#
+# The corpus contains facts that were true long ago and have since been
+# replaced. The old statements are back-dated far enough for trust freshness
+# (90-day half-life) to have decayed; the replacements are recent. The
+# forgetting stage is supposed to stop the superseded ones surfacing.
+#
+# This scenario is the one most able to embarrass the process, and that is why
+# it exists. Forgetting can improve forbidden_hit_rate simply by deleting
+# claims. gold_survival is measured on the same probes so a "win" bought by
+# deleting the CURRENT facts alongside the superseded ones shows up as a
+# regression in the same table.
+id: stale_and_superseded
+description: Old facts superseded by newer ones; the forgetting stage under test.
+
+corpus:
+  - id: old-1
+    source: runbook-2024
+    age_days: 700
+    text: |
+      The payments API is deployed to the eu-west-1 region.
+      Alerts route to the pager rotation named payments-oncall-legacy.
+
+  - id: old-2
+    source: runbook-2024
+    age_days: 650
+    text: |
+      The payments API rate limit is one hundred requests per minute.
+
+  - id: old-3
+    source: wiki-archive
+    age_days: 620
+    text: |
+      Deployments are performed manually by an engineer running the release script.
+
+  - id: new-1
+    source: runbook-current
+    age_days: 6
+    text: |
+      The payments API is deployed to the eu-central-1 region.
+      Alerts route to the pager rotation named payments-oncall.
+
+  - id: new-2
+    source: runbook-current
+    age_days: 4
+    text: |
+      The payments API rate limit is one thousand requests per minute.
+
+  - id: new-3
+    source: runbook-current
+    age_days: 2
+    text: |
+      Deployments are performed automatically by the release pipeline on merge to main.
+
+warmup:
+  - which region is the payments API deployed to
+  - what is the payments API rate limit
+
+probes:
+  - id: p-region
+    query: which region is the payments API deployed to
+    expect: eu-central-1
+    must_not:
+      - eu-west-1
+  - id: p-limit
+    query: what is the payments API rate limit
+    expect: one thousand requests
+    must_not:
+      - one hundred requests
+  - id: p-deploy
+    query: how are deployments performed
+    expect: release pipeline
+    must_not:
+      - manually by an engineer
+  - id: p-pager
+    query: which pager rotation gets payments alerts
+    expect: payments-oncall
+
+process:
+  forget_below_trust: 0.45
+  decay_associations: true
+  decay_inhibition: true

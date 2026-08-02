@@ -1,0 +1,110 @@
+# Does consolidation help a brain that accumulated the same knowledge across
+# many sessions?
+#
+# This is the flagship case for the dedupe + trust-refresh stages. A developer
+# restates the same operational facts across days; each session ingests
+# separately, so the ingest-time exact-text deduper only catches verbatim
+# repeats and leaves reworded restatements standing. Semantic dedupe is
+# supposed to collapse the rest.
+#
+# What a win would look like: retrieval quality holds or improves while
+# duplicate claims collapse, with gold_survival unchanged (nothing lost).
+# What a loss would look like: merges that take a gold claim's text with them,
+# which gold_survival catches and no other metric would.
+id: redundant_sessions
+description: The same knowledge restated across sessions; dedupe + trust refresh under test.
+
+corpus:
+  - id: s1
+    source: session-2026-05-04
+    age_days: 90
+    text: |
+      The billing service runs on PostgreSQL 16. We migrated it from MySQL in Q3.
+      Connection pooling is handled by pgbouncer in transaction mode.
+
+  - id: s2
+    source: session-2026-05-11
+    age_days: 83
+    text: |
+      The billing service runs on PostgreSQL 16.
+      Checkout latency dropped by thirty percent after the migration.
+
+  - id: s3
+    source: session-2026-05-19
+    age_days: 75
+    text: |
+      Billing runs on PostgreSQL 16 in production.
+      Connection pooling is handled by pgbouncer in transaction mode.
+
+  - id: s4
+    source: session-2026-06-02
+    age_days: 61
+    text: |
+      The search service uses Elasticsearch 8 for the product index.
+      Reindexing runs nightly at 02:00 UTC.
+
+  - id: s5
+    source: session-2026-06-20
+    age_days: 43
+    text: |
+      Redis is the cache layer in front of the billing service.
+      The cache TTL is sixty seconds.
+
+  - id: s6
+    source: session-2026-07-08
+    age_days: 25
+    text: |
+      Checkout latency dropped by thirty percent after the migration.
+      The team agreed to keep pgbouncer in transaction mode.
+
+  # s7 and s8 restate s1/s2 with one token added. That is deliberate: the
+  # ingest-time deduper matches normalised text exactly and so lets them
+  # through, while a single added token keeps bag-of-words cosine above the
+  # 0.92 merge threshold — so these are near-duplicates the STUB embedder can
+  # still see. Without a pair in this band the dedupe stage would report zero
+  # here purely because of the stub's lexical ceiling, and the scenario could
+  # not distinguish "dedupe does nothing" from "the harness cannot see it".
+  - id: s7
+    source: session-2026-07-15
+    age_days: 18
+    text: |
+      The billing service runs on PostgreSQL 16 today.
+
+  - id: s8
+    source: session-2026-07-22
+    age_days: 11
+    text: |
+      Checkout latency dropped by thirty percent after the migration overall.
+
+# Warm the association graph so the Hebbian-decay stage has over-base edges to
+# relax; without this it reports zero and the stage is untested rather than
+# shown to be inert.
+warmup:
+  - which database does the billing service run on
+  - how is connection pooling handled
+  - what happened to checkout latency
+
+probes:
+  - id: p-db
+    query: which database does the billing service run on
+    expect: PostgreSQL 16
+  - id: p-pool
+    query: how is connection pooling handled
+    expect: pgbouncer
+  - id: p-latency
+    query: what happened to checkout latency
+    expect: thirty percent
+  - id: p-search
+    query: what powers the product search index
+    expect: Elasticsearch
+  - id: p-cache
+    query: what is the cache layer for billing
+    expect: Redis
+  - id: p-ttl
+    query: how long is the cache TTL
+    expect: sixty seconds
+
+process:
+  dedupe_threshold: 0.92
+  decay_associations: true
+  decay_inhibition: true
