@@ -16,6 +16,7 @@ make build          # Build bin/mnemos
 make install        # Install mnemos to $GOPATH/bin
 make test           # Run all tests (includes 133 eval cases across 13 suites under data/eval/*.yaml)
 make test-race      # What CI actually runs (-race). `make check` omits it, so green locally != green in CI.
+make brain-eval     # Cognitive-process A/B harness — does consolidation IMPROVE the brain? (see below)
 make fmt            # go fmt ./...
 make lint           # go vet + golangci-lint
 make sqlc           # Regenerate sqlc query code from sql/sqlite/
@@ -92,6 +93,7 @@ this file, which made them invisible to anyone navigating by it:
 | `internal/consolidate/` | Systems consolidation (ADR 0011 Phase B) |
 | `internal/curiosity/` | Turns passive metacognition (knowledge gaps) into active questions |
 | `internal/bias/` | Explainable bias indicators over the belief set |
+| `internal/brainbench/` | Paired A/B harness measuring whether the cognitive processes *improve* a brain (`make brain-eval`) |
 | `internal/autoedge/` | Wires the implicit relationships that fall out of writes |
 | `internal/kernel/` | axi-go governance layer for the library core |
 | `internal/govwrite/` | The governed daemon-write surface — every durable write goes through it |
@@ -201,6 +203,44 @@ MNEMOS_TELEMETRY_ENDPOINT   # POST destination for `mnemos metrics --workspace -
 ```
 
 Note: Anthropic has no embedding API — use a separate provider for embeddings.
+
+## Evaluating whether the cognitive processes actually help (`make brain-eval`)
+
+`data/eval/*.yaml` measures **components** (did the extractor/relater/ranker produce the
+right output?). It cannot measure whether the continuous processes — consolidate, forget,
+reinforce, credit, salience, synthesize, decay — **improve** a brain, and until this harness
+nothing did: `mnemos consolidate` prints counters (`forgotten: 412`), which establish that
+the pass *ran*, not that anything got better. That made every claim about the brain
+improving unfalsifiable.
+
+`internal/brainbench` + `tools/brainbench` + `data/eval/brainbench/*.yaml` close it with a
+paired A/B experiment: seed one pristine brain from a scenario corpus (offline and
+deterministic — rule-based extraction, a hashed-bag-of-words stub embedder), copy the file
+three times, run the process set on ONE copy, and diff the outcomes. The third copy is
+untreated and measured independently to establish the noise floor; when the two untreated
+arms disagree the run is reported `invalid` and no delta is attributed. Every arm is a
+throwaway copy measured exactly once, because measurement is itself a mutation (recall
+applies the Hebbian / reconsolidation / inhibition write-backs).
+
+Design rules that are load-bearing, not stylistic:
+- **Metrics with no defensible direction are `Descriptive` and never scored.** Forgetting
+  mechanically shrinks the claim count and raises mean trust; scoring those as wins would
+  report success for a process that only deleted knowledge.
+- **`gold_survival` is the anti-gaming metric.** A process can raise precision and cut
+  dissonance by deleting claims; only survival notices.
+  `TestRun_ReportsRegressionWhenKnowledgeIsDestroyed` asserts a brain-destroying config is
+  reported as a regression, so the harness provably cannot report only good news.
+- **Unmeasurable means `unknown`, never 0.** 0.0 is the *best* value for free energy,
+  calibration error and dissonance, so flattening would score an empty brain as healthy.
+  ADR 0019's `HealthUnknown` maps straight through.
+- **Activity and benefit are separate fields**, reconciled by the verdict:
+  `inert-process-did-nothing` vs `ran-no-measurable-effect` vs improved/regressed/mixed.
+- The limitations list ships **inside** every JSON report, because reports get pasted
+  around without their README.
+
+Not part of `make test` (each scenario seeds and measures four SQLite brains).
+`make brain-eval-strict` exits non-zero on a regression; the default does not, deliberately —
+gating creates pressure to weaken scenarios until they stop reporting one.
 
 ## CI
 
