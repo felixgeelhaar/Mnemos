@@ -14,6 +14,7 @@ import (
 	"go.klarlabs.de/mnemos/internal/auth"
 	"go.klarlabs.de/mnemos/internal/domain"
 	"go.klarlabs.de/mnemos/internal/store"
+	"go.klarlabs.de/mnemos/internal/store/sqlite"
 )
 
 // setupJWTTestEnv wires a per-test JWT secret so newServerMux boots a
@@ -887,7 +888,21 @@ func TestServe_AppendClaims_RejectsInvalidVisibility(t *testing.T) {
 }
 
 // TestServe_AppendClaims_VisibilityDefaultsToTeam verifies that omitting
-// visibility results in the claim being stored with visibility == "team".
+// visibility results in the claim PRESENTING as "team".
+//
+// The assertion is on what the store RETURNS, not on the raw column. Since #346
+// the write path binds visibility raw and the read path normalises, so an
+// omitted audience is stored as "" and presents as domain.DefaultVisibility.
+// The behaviour every consumer sees is unchanged; only where the defaulting
+// happens moved.
+//
+// That indirection is load-bearing rather than incidental: normalising on WRITE
+// makes "the caller said nothing" and "the caller said team" the same string,
+// and the upsert's preserve-on-zero rule has to tell them apart or a partial
+// re-write silently resets a belief curated as `personal` back to `team`.
+//
+// Asserting through the repository is also the rule CLAUDE.md states outright —
+// a test reading the column directly is what #331 and #335 both passed under.
 func TestServe_AppendClaims_VisibilityDefaultsToTeam(t *testing.T) {
 	st := newServeJWTTest(t)
 	now := time.Now().UTC()
@@ -903,11 +918,14 @@ func TestServe_AppendClaims_VisibilityDefaultsToTeam(t *testing.T) {
 		t.Fatalf("POST status = %d, want 201", resp.StatusCode)
 	}
 
-	var vis string
-	if err := st.DB.QueryRowContext(context.Background(), `SELECT visibility FROM claims WHERE id = ?`, "cl_vis_nofield").Scan(&vis); err != nil {
-		t.Fatalf("read visibility: %v", err)
+	stored, err := sqlite.NewClaimRepository(st.DB).ListByIDs(context.Background(), []string{"cl_vis_nofield"})
+	if err != nil {
+		t.Fatalf("read claim: %v", err)
 	}
-	if vis != "team" {
-		t.Errorf("visibility = %q, want \"team\"", vis)
+	if len(stored) != 1 {
+		t.Fatalf("got %d claims, want 1", len(stored))
+	}
+	if stored[0].Visibility != domain.DefaultVisibility {
+		t.Errorf("visibility = %q, want %q", stored[0].Visibility, domain.DefaultVisibility)
 	}
 }
