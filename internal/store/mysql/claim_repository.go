@@ -46,15 +46,16 @@ func (r ClaimRepository) upsertWithReason(ctx context.Context, claims []domain.C
 
 	now := time.Now().UTC()
 	upsert := `
-INSERT INTO claims (id, text, type, confidence, status, created_at, created_by, valid_from, trust_score, valid_to, subject_class, durability, confidence_components,
+INSERT INTO claims (id, text, type, confidence, status, created_at, created_by, valid_from, trust_score, valid_to, half_life_days, subject_class, durability, confidence_components,
                     test_id, test_requirement_ref, test_author, test_last_modified, test_last_run_at, test_pass_count, test_fail_count)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE
   text = VALUES(text),
   type = VALUES(type),
   confidence = VALUES(confidence),
   status = VALUES(status),
   valid_from = VALUES(valid_from),
+  half_life_days = CASE WHEN VALUES(half_life_days) > 0 THEN VALUES(half_life_days) ELSE half_life_days END,
   subject_class = VALUES(subject_class),
   durability = VALUES(durability),
   confidence_components = VALUES(confidence_components),
@@ -87,7 +88,7 @@ VALUES (?, ?, ?, ?, ?, ?)`
 		if _, err := tx.ExecContext(ctx, upsert,
 			claim.ID, claim.Text, string(claim.Type), claim.Confidence,
 			string(claim.Status), claim.CreatedAt.UTC(), actorOr(claim.CreatedBy),
-			validFrom.UTC(), string(claim.SubjectClass),
+			validFrom.UTC(), claim.HalfLifeDays, string(claim.SubjectClass),
 			string(claim.Durability.Normalized()), encodeConfidenceComponents(claim.ConfidenceComponents),
 			claim.TestID, claim.TestRequirementRef, claim.TestAuthor,
 			nullTime(claim.TestLastModified), nullTime(claim.TestLastRunAt),
@@ -630,7 +631,7 @@ func nullTime(t time.Time) any {
 // claimColumns.
 var claimColumnNames = []string{
 	"id", "text", "type", "confidence", "status", "created_at", "created_by",
-	"trust_score", "valid_from", "valid_to", "subject_class", "durability",
+	"trust_score", "valid_from", "valid_to", "half_life_days", "subject_class", "durability",
 	"confidence_components",
 	"test_id", "test_requirement_ref", "test_author", "test_last_modified",
 	"test_last_run_at", "test_pass_count", "test_fail_count",
@@ -670,7 +671,7 @@ func scanClaimRow(rows *sql.Rows) (domain.Claim, error) {
 	var testLastModified, testLastRunAt sql.NullTime
 	if err := rows.Scan(
 		&c.ID, &c.Text, &typ, &c.Confidence, &status,
-		&c.CreatedAt, &c.CreatedBy, &c.TrustScore, &validFrom, &validTo, &subjectClass, &durability, &confidenceComponents,
+		&c.CreatedAt, &c.CreatedBy, &c.TrustScore, &validFrom, &validTo, &c.HalfLifeDays, &subjectClass, &durability, &confidenceComponents,
 		&c.TestID, &c.TestRequirementRef, &c.TestAuthor, &testLastModified, &testLastRunAt, &c.TestPassCount, &c.TestFailCount,
 	); err != nil {
 		return domain.Claim{}, fmt.Errorf("scan claim row: %w", err)

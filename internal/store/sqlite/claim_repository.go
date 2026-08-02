@@ -101,6 +101,7 @@ func (r ClaimRepository) upsertWithReason(ctx context.Context, claims []domain.C
 			CreatedAt:            claim.CreatedAt.UTC().Format(time.RFC3339Nano),
 			CreatedBy:            actorOr(claim.CreatedBy),
 			ValidFrom:            validFrom.UTC().Format(time.RFC3339Nano),
+			HalfLifeDays:         claim.HalfLifeDays,
 			ScopeService:         claim.Scope.Service,
 			ScopeEnv:             claim.Scope.Env,
 			ScopeTeam:            claim.Scope.Team,
