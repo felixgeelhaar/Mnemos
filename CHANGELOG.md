@@ -8,6 +8,42 @@ notable changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **MCP by-id belief tools could not reach a workspace brain** (#341).
+  `query_knowledge` federates the global brain with the repo/workspace overlay
+  and hands back workspace beliefs tagged `belief_provenance: "repo"`, but every
+  tool that resolved a belief BY ID looked in the global brain alone. Given a
+  workspace id they failed with an opaque `-32603 internal error`.
+
+  The consequence is the part that matters: recall could surface a stale
+  workspace belief with **no API path to correct it** — an agent could read the
+  wrong answer but not fetch, deprecate, forget or resolve it. Correcting one
+  meant editing the workspace SQLite file by hand, `claim_status_history` row
+  included.
+
+  `mcpScopeToClaimBrain` now resolves which brain holds an id and pins the
+  request to it, so a write lands in the brain that HOLDS the belief rather than
+  creating a phantom row in the global one. Applied to every by-id belief tool —
+  `get_belief`, `forget`, `update`, `memory_deprecate`, `memory_resolve_dissonance`,
+  `memory_escalate`, `memory_promote`, `record_expectation`, `record_observation`,
+  `record_feedback` — because a partial fix leaves the same trap with no way to
+  tell which tools have it. The overlay wins a tie: `query_knowledge` merges
+  repo-first, so the copy the agent read is the workspace one.
+
+  An id in no reachable brain is now a structured `-32001` naming the brains
+  searched, not `-32603`. The opaque error is what made this take weeks to
+  characterise: it read as a server fault rather than a scoping boundary.
+
+- **`list_beliefs`, `list_dissonances` and `remember_episode` returned `-32603`
+  unconditionally** (#341, second defect). The v0.85.0 brain-native rename
+  (#177) renamed the axi-kernel ACTIONS but not the EXECUTOR KEYS they dispatch
+  to, so every call to these three failed with "action executor not registered",
+  which the MCP boundary sanitises into a generic internal error. Registration
+  succeeded, kernel-build succeeded, and the existing test only checked
+  registration — so three tools were dead in every release since 2026-07-12.
+  `TestMCPExecutorMap_BindsEveryKernelAction` now checks both directions.
+
 ## [0.122.0] — 2026-07-29
 
 ### Added
