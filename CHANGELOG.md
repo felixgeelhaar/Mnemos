@@ -8,7 +8,123 @@ notable changes.
 
 ## [Unreleased]
 
+## [0.123.0] — 2026-08-02
+
+A release about the difference between a system that looks correct and one that
+is. Every fix below was a surface that reported success while the thing beneath
+it did nothing — and several were found only because a number refused to add up.
+
+### Added
+
+- **`trust_decay`, a measured vital** (#328). The share of currently-trusted
+  beliefs due to fall through `low_trust`'s own floor within 30 days unless
+  re-verified — a leading indicator to that vital's lagging one. Computed from
+  real data at each belief's own half-life, never estimated; `unknown` when no
+  belief is above the floor, because a green `0` for a fully-decayed brain is
+  exactly the failure #325 set out to remove.
+
+- **A sleep cycle for the hosted brain** (#329). `serve` ran indefinitely and
+  never consolidated: the local brain gets a daily pass from its session hook,
+  and `serve` got nothing, so narration and dissonance accumulated forever.
+  It now runs the *same* pass on a ticker (`--consolidate-interval`,
+  `MNEMOS_CONSOLIDATE_INTERVAL`, default 20 h; `0` disables), one target per
+  tenant under `--require-tenant`, never overlapping, and never taking the
+  server down on failure.
+
+- **brainbench — an A/B harness for whether the processes actually help**
+  (#330). `make brain-eval` seeds identical brains, runs the process set on one,
+  and diffs. Claim counts, mean trust and database size are reported but
+  deliberately **not scored**: forgetting mechanically shrinks a brain and raises
+  mean trust, so scoring them would report success for a pass that only deleted
+  knowledge. It does not gate CI, because gating creates pressure to weaken
+  scenarios until they stop reporting regressions.
+
+  First results, unflattering parts included: consolidation is a clear win on
+  superseded facts (forbidden-hit-rate 1.00 → 0.00, MRR 0.35 → 0.71, nothing
+  current lost), **mixed** on redundancy (dedupe works, but two ADR-0019 vitals
+  get *worse* because merging concentrates evidence past the hypercorrection
+  floor), and **inert** on narration.
+
+- **`mnemos recompute-half-life`** (#336) — backfills the value #334 started
+  persisting, for rows written before it. Dry-run reports the distribution before
+  anything changes; only fills rows currently `0`, so a `MarkVerified` override
+  is never clobbered.
+
 ### Fixed
+
+- **`half_life_days` was computed on every claim and never stored** (#331, #334).
+  The volatility classifier stamped a per-claim half-life; the `INSERT` column
+  list omitted it, on every backend. On a real 88k-belief brain **every row was
+  `0`**, so every belief decayed at the 90-day default and the classifier had
+  never had an effect. Postgres and MySQL never *read* it either.
+
+  It survived because `MarkVerified` writes the column and every `SELECT` reads
+  it — the plumbing looked complete from every direction except ingest.
+
+- **`health --human` rendered `unknown` as `[ ok ]`** (#328). The #325 fix, which
+  made unmeasured vitals stop reporting a fabricated number, never reached the
+  view most people read. `low_trust` and `staleness` also graded `0/0` as
+  healthy, indistinguishable from a brain that had genuinely lost nothing.
+
+- **Hand-written backend projections had silently drifted** (#335, #340). A guard
+  now fails the build when a column is declared but unread, written but unread,
+  or present in an `ON CONFLICT` set but absent from the read projection — the
+  last being a read-modify-write that would silently zero it across thousands of
+  rows. It found three drifts beyond the two known, including **MySQL never
+  reading `lifecycle`**, so promoting a belief succeeded and every read reported
+  it uncurated. Two remaining are tracked in #338 and #339.
+
+- **Postgres and MySQL never persisted scope, provenance or visibility** (#338,
+  #339, #345). The two remaining drifts above, fixed. `Claim.Scope` existed in
+  both backends' DDL but in neither write path, so **scoped queries against a
+  hosted brain returned nothing** — `Context.Matches` wildcards on the filter
+  side, so an empty stored scope fails every non-empty filter. Eight further
+  columns — the whole epistemic-provenance set plus `visibility` — were not
+  declared at all.
+
+  Visibility, stated precisely rather than alarmingly: an `org` belief reading as
+  `team` **is** admitted to team-tier queries that would otherwise exclude it.
+  It is not a privilege issue — the query's tier is caller-supplied, read
+  straight from `req.Visibility` and never derived from identity, so any caller
+  could already ask for `org`. Visibility is a scoping preference, not an
+  enforcement boundary.
+
+  **Found while fixing, in neither issue:** MySQL could not read its own upgraded
+  rows. `confidence_components` is `JSON NULL` with no default there and was
+  scanned into a plain `string`, so any row predating the ALTER failed with
+  `converting NULL to string is unsupported` — unreadable rather than degraded,
+  and it took the whole batch down.
+
+  **Why both shipped:** the cross-backend parity tests opt hosted backends in
+  from `TEST_*_DSN`, and `db-providers.yml` did not include `./internal/store/`
+  where they live. In CI they ran sqlite+memory only, so every assertion about a
+  hosted brain was vacuous. That path is now in the workflow, which is the part
+  that stops the next one.
+
+- **A partial write erased curation nothing could reconstruct** (#346). Generalises
+  #334 from `half_life_days` to all eleven scope / provenance / visibility columns
+  on every backend. No ingest path produces any of them, and the writers that can
+  hit an existing claim id — `POST /v1/beliefs`, gRPC `WriteBeliefs` — build a
+  belief from a request with no such field, so a blind `= excluded.x` silently
+  reverted a belief promoted to `personal` back to `team`, cleared `Scope` so
+  scoped queries stopped matching it, and cleared the execution record so
+  liveness read the belief as never run. An explicit value still always wins, so
+  nothing became uncorrectable.
+
+  SQLite needed two things the hosted backends did not: `visibility` bound **raw**
+  on write, because normalising to the default makes "unset" and "explicitly team"
+  the same string and the rule must tell them apart; and `<> ''` rather than
+  `IS NOT NULL` for `last_executed`, which this backend stores as a string. The
+  second was caught by the test, not by review — ten of eleven columns passed on
+  the first run.
+
+- **The docs disagreed with the code about what forgetting does** (#332, #333).
+  Automatic forgetting closes valid-time and never touches `Status`; deprecation
+  is a separate mechanism used by deliberate acts. The wrong description sent an
+  ADR's gap analysis astray and caused a real measurement bug in the harness.
+  Root cause fixed rather than the symptom: the one accurate comment was
+  physically split in half by a `const`, so Go attached only its second half and
+  the correct description was unreadable where anyone would look.
 
 - **MCP by-id belief tools could not reach a workspace brain** (#341).
   `query_knowledge` federates the global brain with the repo/workspace overlay
@@ -43,6 +159,40 @@ notable changes.
   succeeded, kernel-build succeeded, and the existing test only checked
   registration — so three tools were dead in every release since 2026-07-12.
   `TestMCPExecutorMap_BindsEveryKernelAction` now checks both directions.
+
+- **Hand-maintained lists that nothing checked** (#344). Two lists are written
+  by hand and were free to drift from the code they describe, which is how the
+  three dead tools above survived: the axi-kernel executor keys, and the
+  `commands` list `mnemos help` and did-you-mean suggestions read. The latter
+  was missing six real commands — `health`, `journal`, `predictive-error`,
+  `classify-durability`, `float-back` and `global` — so the CLI denied that its
+  own commands existed and suggested nothing when one was mistyped.
+
+  `internal/sourceguard` now derives what the code actually dispatches from the
+  AST and fails `go test` on a mismatch in **either** direction: a tool with no
+  executor (dead on arrival), an executor nothing dispatches to (half-finished
+  rename), a command absent from `commands`, or a `commands` entry that
+  dispatches nowhere. It shares its allowlist semantics with the #340 projection
+  guard, so an excuse that stops being needed fails as **stale** rather than
+  lingering. All four allowlists ship empty — none of the nine drifts found was
+  deliberate.
+
+  Reading the AST rather than matching text is what makes it trustworthy:
+  `case "verify", "reconsolidate":` is a `CaseClause.List`, so a multi-value case
+  yields every value. A regex over the same file reported `reconsolidate` as a
+  phantom command during this work, and it is not one.
+
+### Documentation
+
+- **ADR 0024 — graded retrievability** (#327). mnemos preserves history but has
+  no retrieval strength that fades while a trace persists; Bjork's storage-vs-
+  retrieval distinction is half-implemented. Design only.
+- **ADR 0025 — `half_life_days = 0` is two facts** (#337). "Classified durable"
+  and "never classified" store the same value, so a backfill can never be done
+  and coverage is unanswerable. Design only.
+- `CLAUDE.md` stopped presenting partial lists as complete (#326) — the MCP tool
+  list named 18 of ~53, and twelve packages including the whole cognitive layer
+  were absent.
 
 ## [0.122.0] — 2026-07-29
 
