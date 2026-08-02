@@ -375,6 +375,10 @@ func handleMCP(args []string) {
 		memFacade  mnemos.Memory
 		memErr     error
 		tenantMems = map[string]mnemos.Memory{}
+		// brainMems caches one facade per NON-default brain (the repo/workspace
+		// overlay), so a by-id read against it costs one construction for the
+		// life of the server rather than one per call.
+		brainMems = map[string]mnemos.Memory{}
 	)
 	// getMem returns the cognitive-layer Memory for a request. In multi-tenant
 	// mode it returns a per-tenant view (memFacade.Tenant), cached so each
@@ -409,6 +413,28 @@ func handleMCP(args []string) {
 		}
 		tenantMems[tenant] = tm
 		return tm, nil
+	}
+
+	// getMemForBrain returns the Memory for a brain a belief id resolved to
+	// (#341). The global tier keeps its existing facade — including the
+	// multi-tenant scoping in getMem — while the repo/workspace overlay gets its
+	// own, built through the SAME constructor so the two tiers cannot report a
+	// belief differently.
+	getMemForBrain := func(ctx context.Context, brain claimBrain) (mnemos.Memory, error) {
+		if brain.DSN == "" {
+			return getMem(ctx)
+		}
+		memMu.Lock()
+		defer memMu.Unlock()
+		if m, cached := brainMems[brain.DSN]; cached {
+			return m, nil
+		}
+		m, err := newLibraryMemoryForDSN(brain.DSN, mcpActor)
+		if err != nil {
+			return nil, err
+		}
+		brainMems[brain.DSN] = m
+		return m, nil
 	}
 
 	// Build the axi-go kernel that wraps every MCP tool with effect
@@ -790,11 +816,7 @@ func handleMCP(args []string) {
 		Description("Fetch a single claim's full detail (statement, trust, lifecycle, validity).").
 		OutputSchema(mcpClaimDetailOutput{}).
 		Handler(func(ctx context.Context, input mcpGetClaimInput) (mcpClaimDetailOutput, error) {
-			mem, err := getMem(ctx)
-			if err != nil {
-				return mcpClaimDetailOutput{}, err
-			}
-			return mcpGetClaim(ctx, mem, input)
+			return mcpRunGetClaim(ctx, getMemForBrain, input)
 		})
 
 	srv.Tool("classify").
@@ -892,6 +914,9 @@ func handleMCP(args []string) {
 		}
 		for _, tm := range tenantMems {
 			_ = tm.Close()
+		}
+		for _, bm := range brainMems {
+			_ = bm.Close()
 		}
 		memMu.Unlock()
 		closeConnCache()
@@ -1841,8 +1866,11 @@ type mcpMemoryContextOutput struct {
 }
 
 func mcpRunMemoryEscalate(ctx context.Context, _ string, input mcpMemoryEscalateInput) (mcpMemoryEscalateOutput, error) {
-	if input.ClaimID == "" {
-		return mcpMemoryEscalateOutput{}, fmt.Errorf("claim_id is required")
+	// Escalate the belief in the brain that HOLDS it (#341); a bare
+	// openConn would only ever see the global tier.
+	ctx, _, err := mcpScopeToClaimBrain(ctx, input.ClaimID)
+	if err != nil {
+		return mcpMemoryEscalateOutput{}, err
 	}
 	conn, err := openConn(ctx)
 	if err != nil {
@@ -1863,8 +1891,12 @@ func mcpRunMemoryEscalate(ctx context.Context, _ string, input mcpMemoryEscalate
 }
 
 func mcpRunMemoryDeprecate(ctx context.Context, actor string, input mcpMemoryDeprecateInput) (mcpMemoryDeprecateOutput, error) {
-	if input.ClaimID == "" {
-		return mcpMemoryDeprecateOutput{}, fmt.Errorf("claim_id is required")
+	// Pin the write to the brain that HOLDS the belief BEFORE opening the
+	// writer (#341). Deprecating a workspace belief against the global brain
+	// does nothing, or worse writes a phantom row.
+	ctx, _, err := mcpScopeToClaimBrain(ctx, input.ClaimID)
+	if err != nil {
+		return mcpMemoryDeprecateOutput{}, err
 	}
 	gw, err := openWriter(ctx)
 	if err != nil {
@@ -1899,6 +1931,14 @@ func mcpRunMemoryResolve(ctx context.Context, actor string, input mcpMemoryResol
 	if input.WinnerID == input.LoserID {
 		return mcpMemoryResolveOutput{}, fmt.Errorf("winner_id and loser_id must differ")
 	}
+	// Both beliefs must live in ONE brain: the resolution writes both status
+	// transitions and this API cannot span two stores atomically (#341). The
+	// resolver refuses a split pair explicitly rather than picking a brain and
+	// silently dropping the other side.
+	ctx, _, err := mcpScopeToClaimBrain(ctx, input.WinnerID, input.LoserID)
+	if err != nil {
+		return mcpMemoryResolveOutput{}, err
+	}
 	gw, err := openWriter(ctx)
 	if err != nil {
 		return mcpMemoryResolveOutput{}, err
@@ -1930,8 +1970,12 @@ func mcpRunMemoryResolve(ctx context.Context, actor string, input mcpMemoryResol
 
 func mcpRunMemoryPromote(ctx context.Context, actor string, input mcpMemoryPromoteInput) (mcpMemoryPromoteOutput, error) {
 	_ = actor // attribution lives in the verify path's own log
-	if input.ClaimID == "" {
-		return mcpMemoryPromoteOutput{}, fmt.Errorf("claim_id is required")
+	// MarkVerified is a blind update: without resolving the owning brain first
+	// (#341) a workspace belief would be "re-verified" against the global brain,
+	// silently touching nothing.
+	ctx, _, err := mcpScopeToClaimBrain(ctx, input.ClaimID)
+	if err != nil {
+		return mcpMemoryPromoteOutput{}, err
 	}
 	gw, err := openWriter(ctx)
 	if err != nil {
@@ -2134,8 +2178,11 @@ func mcpRunRemember(ctx context.Context, actor string, input mcpRememberInput) (
 }
 
 func mcpRunForget(ctx context.Context, actor string, input mcpForgetInput) (mcpForgetOutput, error) {
-	if strings.TrimSpace(input.ClaimID) == "" {
-		return mcpForgetOutput{}, fmt.Errorf("claim_id is required")
+	// Forget the belief in the brain that HOLDS it (#341): the agent's id may
+	// well have come from the workspace tier of a federated recall.
+	ctx, _, err := mcpScopeToClaimBrain(ctx, input.ClaimID)
+	if err != nil {
+		return mcpForgetOutput{}, err
 	}
 	gw, err := openWriter(ctx)
 	if err != nil {
@@ -2174,6 +2221,12 @@ func mcpRunUpdate(ctx context.Context, actor string, input mcpUpdateInput) (mcpU
 	}
 	if input.Confidence < 0 || input.Confidence > 1 {
 		return mcpUpdateOutput{}, fmt.Errorf("confidence must be in [0, 1]")
+	}
+	// Rewrite the belief in the brain that HOLDS it (#341) — correcting a stale
+	// workspace belief in place is the whole point of this tool.
+	ctx, _, err := mcpScopeToClaimBrain(ctx, claimID)
+	if err != nil {
+		return mcpUpdateOutput{}, err
 	}
 	gw, err := openWriter(ctx)
 	if err != nil {

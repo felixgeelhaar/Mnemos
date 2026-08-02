@@ -55,8 +55,12 @@ type mcpRecordExpectationOutput struct {
 // same band as one passing 5 rather than an unsatisfiable one.
 func mcpRunRecordExpectation(ctx context.Context, input mcpRecordExpectationInput) (mcpRecordExpectationOutput, error) {
 	claimID := strings.TrimSpace(input.ClaimID)
-	if claimID == "" {
-		return mcpRecordExpectationOutput{}, fmt.Errorf("claimId is required")
+	// Attach the expectation in the brain that HOLDS the belief (#341): a
+	// federated recall hands out workspace-tier ids, and the expectation must
+	// live beside the belief it predicts or credit assignment never sees it.
+	ctx, _, err := mcpScopeToClaimBrain(ctx, claimID)
+	if err != nil {
+		return mcpRecordExpectationOutput{}, err
 	}
 	w, err := openWriter(ctx)
 	if err != nil {
@@ -129,8 +133,12 @@ type mcpRecordObservationOutput struct {
 // invites two implementations of one rule.
 func mcpRunRecordObservation(ctx context.Context, input mcpRecordObservationInput) (mcpRecordObservationOutput, error) {
 	claimID := strings.TrimSpace(input.ClaimID)
-	if claimID == "" {
-		return mcpRecordObservationOutput{}, fmt.Errorf("claimId is required")
+	// Resolve the belief's own brain (#341) — the expectation this observation
+	// resolves was written there, so looking anywhere else reports "no
+	// expectation" for a belief that has one.
+	ctx, _, err := mcpScopeToClaimBrain(ctx, claimID)
+	if err != nil {
+		return mcpRecordObservationOutput{}, err
 	}
 	w, err := openWriter(ctx)
 	if err != nil {
@@ -197,8 +205,11 @@ type mcpRecordFeedbackOutput struct {
 // recall should clear a run of bad ones rather than merely offset it.
 func mcpRunRecordFeedback(ctx context.Context, input mcpRecordFeedbackInput) (mcpRecordFeedbackOutput, error) {
 	claimID := strings.TrimSpace(input.ClaimID)
-	if claimID == "" {
-		return mcpRecordFeedbackOutput{}, fmt.Errorf("claimId is required")
+	// The recall that produced this feedback federates both tiers (#341), so the
+	// belief being judged is as likely to be a workspace one as a global one.
+	ctx, _, err := mcpScopeToClaimBrain(ctx, claimID)
+	if err != nil {
+		return mcpRecordFeedbackOutput{}, err
 	}
 	w, err := openWriter(ctx)
 	if err != nil {
