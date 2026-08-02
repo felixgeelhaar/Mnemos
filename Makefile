@@ -17,7 +17,7 @@ PROTO_GEN := proto/gen
 # never used. The same version is recorded as a `tool` dependency in go.mod.
 SQLC_VERSION := v1.30.0
 
-.PHONY: fmt lint test test-integration build cross check sqlc install release-snapshot release-check proto mutation mutation-trust mutation-relate mutation-query
+.PHONY: fmt lint test test-integration build cross check sqlc install release-snapshot release-check proto mutation mutation-trust mutation-relate mutation-query brain-eval brain-eval-strict
 
 fmt:
 	$(GO) fmt ./...
@@ -113,3 +113,21 @@ mutation-relate:
 
 mutation-query:
 	$(GO) run ./tools/mutate -pkg ./internal/query -threshold 0.0 -v -json mutation-query.json
+
+# brain-eval answers "do the cognitive processes IMPROVE what the brain knows?"
+# — a paired A/B experiment (control vs consolidated, on byte-identical brains)
+# rather than the activity counters `mnemos consolidate` already prints. Writes
+# a machine-readable report to brainbench.json alongside the human table.
+#
+# MNEMOS_DB_URL is pinned to a throwaway: every arm is a temp SQLite file, but
+# an unset MNEMOS_DB_URL makes the resolver fall back to the developer's real
+# global brain, which is how test fixtures once ended up in a live 118 MB store.
+#
+# It does NOT gate: a regression here is a finding to READ, and failing the
+# build on one creates pressure to weaken scenarios until they stop reporting
+# any. Use brain-eval-strict when you have a baseline you intend to hold.
+brain-eval:
+	@MNEMOS_DB_URL=memory://brain-eval $(GO) run ./tools/brainbench -json brainbench.json
+
+brain-eval-strict:
+	@MNEMOS_DB_URL=memory://brain-eval $(GO) run ./tools/brainbench -json brainbench.json -fail-on-regression
