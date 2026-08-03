@@ -1,8 +1,11 @@
 # ADR 0025: `half_life_days = 0` is two different facts — record classification provenance separately
 
-- **Status:** Proposed. **Design only — nothing implemented.** No Go file, no SQL file and
-  no schema is touched by this ADR.
-- **Date:** 2026-08-02
+- **Status:** **Accepted and implemented** (2026-08-03). `claims.half_life_classifier` ships
+  on all five backends, `extract.VolatilityClassifierVersion` stamps it at ingest, and
+  `mnemos recompute-half-life` records a verdict for durable beliefs instead of re-examining
+  them on every run. `internal/trust` is untouched, as designed — no recall behaviour
+  changed on the day it shipped.
+- **Date:** 2026-08-02 (proposed), 2026-08-03 (implemented)
 - **Deciders:** Felix Geelhaar
 - **Scope:** The representation of per-claim freshness half-life provenance on the
   `claims` row. Completes the work started in #331 (the half-life was computed and dropped

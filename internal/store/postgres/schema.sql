@@ -49,6 +49,11 @@ CREATE TABLE IF NOT EXISTS claims (
   last_verified  timestamptz,
   verify_count   integer          NOT NULL DEFAULT 0,
   half_life_days double precision NOT NULL DEFAULT 0,
+  -- ADR 0025: which classifier assigned half_life_days. '' means none did,
+  -- which is a different fact from a classifier judging the belief durable
+  -- (that also stores 0). No RLS change needed: the ADR-0007 scoped[] array
+  -- lists TABLES, and claims is already in it.
+  half_life_classifier text NOT NULL DEFAULT '',
   scope_service  text             NOT NULL DEFAULT '',
   scope_env      text             NOT NULL DEFAULT '',
   scope_team     text             NOT NULL DEFAULT ''
@@ -59,6 +64,9 @@ CREATE TABLE IF NOT EXISTS claims (
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_verified  timestamptz;
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS verify_count   integer          NOT NULL DEFAULT 0;
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS half_life_days double precision NOT NULL DEFAULT 0;
+-- Metadata-only on PG 11+: a non-volatile default lives in the catalog rather
+-- than rewriting the heap, so this does not touch the existing rows.
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS half_life_classifier text NOT NULL DEFAULT '';
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS scope_service  text             NOT NULL DEFAULT '';
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS scope_env      text             NOT NULL DEFAULT '';
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS scope_team     text             NOT NULL DEFAULT '';

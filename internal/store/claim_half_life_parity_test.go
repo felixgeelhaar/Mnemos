@@ -94,6 +94,87 @@ func TestPersistArtifacts_PersistsVolatileHalfLife(t *testing.T) {
 			t.Errorf("%s: durable claim read back with half_life_days = %v, want 0 "+
 				"(store default)", b.name, durable.HalfLifeDays)
 		}
+
+		// ADR 0025: BOTH claims must read back carrying the classifier that
+		// judged them — including the durable one, whose value is 0.
+		//
+		// This is the assertion that distinguishes "the classifier looked and
+		// declined to shorten" from "nothing has ever looked", and it is
+		// deliberately made on the READ-BACK. A column added to the DDL but
+		// missing from a hand-written backend's INSERT or projection still
+		// commits, still scans, and still hands back a zero value
+		// indistinguishable from "never set" — the exact failure mode of #331
+		// and #335, neither of which any write-path test caught.
+		for id, c := range map[string]domain.Claim{volatileID: got, durableID: durable} {
+			if c.HalfLifeClassifier != extract.VolatilityClassifierVersion {
+				t.Errorf("%s: %s read back with half_life_classifier = %q, want %q — "+
+					"the verdict was dropped at the store boundary, so this backend "+
+					"cannot tell a classified-durable belief from an unexamined one",
+					b.name, id, c.HalfLifeClassifier, extract.VolatilityClassifierVersion)
+			}
+			if !c.HalfLifeClassified() {
+				t.Errorf("%s: %s reports HalfLifeClassified() = false after ingest", b.name, id)
+			}
+		}
+	}
+}
+
+// A stored classifier verdict must survive a re-ingest that carries none.
+//
+// The ON CONFLICT branch is a separate code path from the INSERT, and a blind
+// `half_life_classifier = excluded.half_life_classifier` would make the
+// coverage number decay under ordinary write traffic: every API writer that
+// builds a belief field-by-field carries an empty classifier, so re-writing a
+// belief through POST /v1/beliefs would silently un-classify it. A metric that
+// drops for reasons unrelated to classification is worse than no metric,
+// because it still looks like a measurement.
+func TestUpsert_PreservesClassifierWhenIncomingCarriesNone(t *testing.T) {
+	backends := openBackends(t)
+	ctx := context.Background()
+	at := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	const id = "c-classifier-preserved"
+
+	for _, b := range backends {
+		classified := domain.Claim{
+			ID: id, Text: "the api gateway is running on port 8080",
+			Type: domain.ClaimTypeFact, Confidence: 0.9,
+			Status: domain.ClaimStatusActive, CreatedAt: at,
+			HalfLifeDays:       extract.VolatileHalfLifeDays,
+			HalfLifeClassifier: extract.VolatilityClassifierVersion,
+		}
+		if err := b.conn.Claims.Upsert(ctx, []domain.Claim{classified}); err != nil {
+			t.Fatalf("%s: seed classified claim: %v", b.name, err)
+		}
+
+		// The partial writer: same id, no classifier, no half-life — the shape
+		// POST /v1/beliefs and gRPC WriteBeliefs both produce.
+		partial := domain.Claim{
+			ID: id, Text: "the api gateway is running on port 8080 and 8443",
+			Type: domain.ClaimTypeFact, Confidence: 0.95,
+			Status: domain.ClaimStatusActive, CreatedAt: at,
+		}
+		if err := b.conn.Claims.Upsert(ctx, []domain.Claim{partial}); err != nil {
+			t.Fatalf("%s: partial rewrite: %v", b.name, err)
+		}
+
+		stored, err := b.conn.Claims.ListByIDs(ctx, []string{id})
+		if err != nil || len(stored) != 1 {
+			t.Fatalf("%s: list: %v (%d rows)", b.name, err, len(stored))
+		}
+		got := stored[0]
+
+		if got.Text != partial.Text {
+			t.Errorf("%s: text = %q, want the rewritten %q — the rule preserves what is "+
+				"absent, it does not freeze the row", b.name, got.Text, partial.Text)
+		}
+		if got.HalfLifeClassifier != extract.VolatilityClassifierVersion {
+			t.Errorf("%s: half_life_classifier = %q after a partial rewrite, want %q preserved",
+				b.name, got.HalfLifeClassifier, extract.VolatilityClassifierVersion)
+		}
+		if got.HalfLifeDays != extract.VolatileHalfLifeDays {
+			t.Errorf("%s: half_life_days = %v, want %v preserved",
+				b.name, got.HalfLifeDays, extract.VolatileHalfLifeDays)
+		}
 	}
 }
 

@@ -270,6 +270,31 @@ type Belief struct {
 	// a year.
 	HalfLifeDays float64
 
+	// HalfLifeClassifier records WHICH classifier assigned HalfLifeDays, and
+	// is empty when none did (ADR 0025).
+	//
+	// It exists because HalfLifeDays = 0 is two different facts: "the
+	// classifier read this text and declined to shorten it" (a verdict) and
+	// "no classifier has ever looked at this claim" (the absence of one).
+	// Both store 0, and for SCORING they are genuinely identical — trust's
+	// `<= 0 → use the default` contract is correct for both, which is why
+	// the collision went unnoticed. Everything downstream of the number is
+	// what breaks: a backfill cannot report that it finished, a classifier
+	// improvement cannot find the rows a superseded version looked at, and
+	// coverage is unanswerable.
+	//
+	// Read with HalfLifeDays, the two columns give four distinct states:
+	//
+	//	""              + 0   unknown — nobody has looked
+	//	""              + >0  human override via MarkVerified
+	//	"volatility/v1" + 0   classified DURABLE — decays at the default by decision
+	//	"volatility/v1" + 14  classified volatile
+	//
+	// Nothing in scoring, ranking, admission, staleness or consolidation
+	// reads this field, deliberately: a data-model change that alters recall
+	// on day one cannot be rolled back by reverting a binary.
+	HalfLifeClassifier string
+
 	// Scope optionally narrows the claim to a specific operational
 	// context (service, env, team). Empty scope (the zero value)
 	// means "applies everywhere". The query engine filters by scope
@@ -418,6 +443,18 @@ func (c Belief) IsValidAt(t time.Time) bool {
 // (i.e., ValidTo is set). Useful for filtering history-aware queries.
 func (c Belief) IsSuperseded() bool {
 	return !c.ValidTo.IsZero()
+}
+
+// HalfLifeClassified reports whether a volatility classifier has assigned this
+// belief's half-life (ADR 0025).
+//
+// This is the question HalfLifeDays alone cannot answer: a belief the
+// classifier read and judged durable stores 0, and so does one nothing has
+// ever looked at. Callers wanting "what work remains" must ask this, never
+// `HalfLifeDays == 0` — that predicate matches 95% of a fully-classified brain
+// and is why the backfill could never terminate.
+func (c Belief) HalfLifeClassified() bool {
+	return c.HalfLifeClassifier != ""
 }
 
 // BeliefEvidence links a Belief to the Episode that supports it.

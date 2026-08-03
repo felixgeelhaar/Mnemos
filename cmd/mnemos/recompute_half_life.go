@@ -120,6 +120,21 @@ type halfLifePlan struct {
 	// ByHalfLife is the distribution of values the pass would write, so the
 	// result can be checked afterwards per value rather than as one total.
 	ByHalfLife map[float64]int
+
+	// Durable counts claims the classifier read and judged durable. Their
+	// half_life_days stays 0 and nothing about scoring changes; what changes
+	// is that the verdict becomes readable, so the pass can terminate and a
+	// later classifier version can find them (ADR 0025).
+	Durable int
+
+	// AlreadyClassified counts claims carrying a verdict from THIS classifier
+	// version. Before ADR 0025 these were indistinguishable from unclassified
+	// and were redone on every run.
+	AlreadyClassified int
+
+	// Restamped counts claims an OLDER classifier version judged durable and
+	// this one agrees with: the value is unchanged, only the stamp moves.
+	Restamped int
 }
 
 // planHalfLifeBackfill selects the claims whose half-life the current classifier
@@ -137,9 +152,43 @@ func planHalfLifeBackfill(claims []domain.Claim) halfLifePlan {
 			plan.AlreadySet++
 			continue
 		}
+		// Already carries a verdict from THIS classifier version, and that
+		// verdict was "durable" (the value is 0). Before ADR 0025 this state was
+		// indistinguishable from "never classified", so every run redid all of
+		// them and the pass could never report itself finished — on a real brain
+		// that was 95.5% of the live set, every time, forever.
+		//
+		// A verdict from an OLDER version is deliberately NOT skipped: finding
+		// those is the reason the version is stored rather than a bare flag.
+		if c.HalfLifeClassifier == extract.VolatilityClassifierVersion {
+			plan.AlreadyClassified++
+			continue
+		}
 		hl := extract.HalfLifeFor(string(c.Type), c.Text)
+		if hl == 0 && c.HalfLifeClassified() {
+			// Reclassified by a newer version and still durable: the value does
+			// not change, but the stamp must, or the row stays queued forever.
+			c.HalfLifeClassifier = extract.VolatilityClassifierVersion
+			if err := c.Validate(); err != nil {
+				plan.Unwritable++
+				continue
+			}
+			plan.Changes = append(plan.Changes, c)
+			plan.Restamped++
+			continue
+		}
 		if hl == 0 {
-			continue // classifier is not confident; leave the store default
+			// Classifier read it and declined to shorten. Record the VERDICT —
+			// the value stays 0 and scoring is unchanged, but "judged durable"
+			// stops looking like "never examined". This is the whole of ADR 0025.
+			c.HalfLifeClassifier = extract.VolatilityClassifierVersion
+			if err := c.Validate(); err != nil {
+				plan.Unwritable++
+				continue
+			}
+			plan.Changes = append(plan.Changes, c)
+			plan.Durable++
+			continue
 		}
 		// A malformed legacy row would fail Claim.Validate inside the store's
 		// upsert transaction and take the whole batch down with it. Count it and
@@ -149,6 +198,7 @@ func planHalfLifeBackfill(claims []domain.Claim) halfLifePlan {
 			continue
 		}
 		c.HalfLifeDays = hl
+		c.HalfLifeClassifier = extract.VolatilityClassifierVersion
 		plan.Changes = append(plan.Changes, c)
 		plan.ByHalfLife[hl]++
 	}
@@ -237,7 +287,20 @@ func verifyHalfLifeBatch(ctx context.Context, w *govwrite.Writer, chunk []domain
 func printHalfLifePlan(plan halfLifePlan) {
 	fmt.Printf("live claims:     %d (everything but deprecated)\n", plan.Live)
 	fmt.Printf("half-life set:   %d (%.1f%%) — left untouched\n", plan.AlreadySet, pct(plan.AlreadySet, plan.Live))
+	// Coverage is the number ADR 0025 exists to make answerable. Before the
+	// classifier column, "classified durable" and "never classified" were the
+	// same bytes, so this line could not be written at all — and the pass could
+	// never report itself finished.
+	classified := plan.AlreadySet + plan.AlreadyClassified
+	fmt.Printf("classified:      %d (%.1f%%) — a verdict has been recorded\n", classified, pct(classified, plan.Live))
 	fmt.Printf("would backfill:  %d (%.1f%%)\n", len(plan.Changes), pct(len(plan.Changes), plan.Live))
+	if plan.Durable > 0 {
+		fmt.Printf("  of which %d judged DURABLE — half-life unchanged at the store default,\n"+
+			"  recording only that the classifier looked. Scoring does not change.\n", plan.Durable)
+	}
+	if plan.Restamped > 0 {
+		fmt.Printf("  of which %d re-stamped from an older classifier version (value unchanged)\n", plan.Restamped)
+	}
 	printHalfLifeDistribution(plan.ByHalfLife, "  ")
 	if plan.Unwritable > 0 {
 		fmt.Printf("skipped:         %d claim(s) the classifier matched but that fail validation (unwritable)\n", plan.Unwritable)
@@ -252,7 +315,7 @@ func printHalfLifePlan(plan halfLifePlan) {
 }
 
 func printHalfLifeResult(plan halfLifePlan, res halfLifeApplyResult) {
-	fmt.Printf("\nset half_life_days on %d claim(s) in %d batch(es):\n", res.Written, res.Batches)
+	fmt.Printf("\nrecorded a classifier verdict on %d claim(s) in %d batch(es):\n", res.Written, res.Batches)
 	printHalfLifeDistribution(plan.ByHalfLife, "  ")
 	if res.Verified != res.Written {
 		// Silence here would reproduce the original defect: a write path that

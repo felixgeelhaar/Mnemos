@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS claims (
   last_verified  DATETIME(6)      NULL,
   verify_count   INT              NOT NULL DEFAULT 0,
   half_life_days DOUBLE           NOT NULL DEFAULT 0,
+  -- ADR 0025: which classifier assigned half_life_days. '' means none did.
+  half_life_classifier VARCHAR(64) NOT NULL DEFAULT '',
   scope_service  VARCHAR(190)     NOT NULL DEFAULT '',
   scope_env      VARCHAR(64)      NOT NULL DEFAULT '',
   scope_team     VARCHAR(190)     NOT NULL DEFAULT '',
@@ -75,6 +77,8 @@ CREATE TABLE IF NOT EXISTS claims (
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_verified  DATETIME(6)  NULL;
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS verify_count   INT          NOT NULL DEFAULT 0;
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS half_life_days DOUBLE       NOT NULL DEFAULT 0;
+-- ALGORITHM=INSTANT on MySQL 8.0 (column added at the end of the table).
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS half_life_classifier VARCHAR(64) NOT NULL DEFAULT '';
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS scope_service  VARCHAR(190) NOT NULL DEFAULT '';
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS scope_env      VARCHAR(64)  NOT NULL DEFAULT '';
 ALTER TABLE claims ADD COLUMN IF NOT EXISTS scope_team     VARCHAR(190) NOT NULL DEFAULT '';

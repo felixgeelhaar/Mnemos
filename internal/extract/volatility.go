@@ -31,6 +31,23 @@ import (
 // is installed or running no longer recalls as settled fact.
 const VolatileHalfLifeDays = 14.0
 
+// VolatilityClassifierVersion identifies the revision of HalfLifeFor that
+// produced a stored verdict, and is written to Belief.HalfLifeClassifier
+// whenever this classifier assigns a half-life (ADR 0025).
+//
+// Bump it on any change to the lexicons, the veto or the normaliser. That is
+// the whole point: a stored verdict records which revision decided, so rows an
+// older version looked at can be found and revisited. Without it, widening the
+// classifier — which volatility.go says outright is expected, since it
+// deliberately under-catches — has no way to target the rows that need
+// reclassifying, and the only available action is to reprocess the entire
+// corpus forever.
+//
+// The `<classifier>/<version>` shape mirrors extract.PromptVersion, which
+// exists for the same reason one layer up: to know which revision of a
+// text-processing rule produced a stored artefact.
+const VolatilityClassifierVersion = "volatility/v1"
+
 // systemStateRE matches assertions about mutable system state — what exists,
 // what is installed or wired, what is running, what version is deployed.
 //

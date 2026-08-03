@@ -76,6 +76,17 @@ func (r ClaimRepository) upsertWithReason(_ context.Context, claims []domain.Cla
 				stored.HalfLifeDays = existing.HalfLifeDays
 			}
 		}
+		// And the same for the classifier provenance (ADR 0025), matching the
+		// SQL backends' `CASE WHEN excluded.half_life_classifier <> ''` rule. A
+		// writer carrying no verdict must not erase a stored one, or the
+		// coverage number would decay under ordinary write traffic — a metric
+		// that drops for reasons unrelated to classification is worse than no
+		// metric, because it still looks like a measurement.
+		if claim.HalfLifeClassifier == "" {
+			if existing, ok := r.state.claims[claim.ID]; ok {
+				stored.HalfLifeClassifier = existing.HalfLifeClassifier
+			}
+		}
 
 		if _, ok := r.state.claims[claim.ID]; !ok {
 			r.state.claimOrder = append(r.state.claimOrder, claim.ID)

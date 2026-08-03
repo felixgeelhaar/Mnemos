@@ -28,6 +28,10 @@ CREATE TABLE IF NOT EXISTS claims (
   last_verified TEXT NOT NULL DEFAULT '',
   verify_count INTEGER NOT NULL DEFAULT 0,
   half_life_days REAL NOT NULL DEFAULT 0,
+  -- half_life_classifier (ADR 0025): which classifier assigned half_life_days.
+  -- '' means none did, which is NOT the same as a classifier deciding the
+  -- belief is durable -- that also stores half_life_days = 0.
+  half_life_classifier TEXT NOT NULL DEFAULT '',
   scope_service TEXT NOT NULL DEFAULT '',
   scope_env TEXT NOT NULL DEFAULT '',
   scope_team TEXT NOT NULL DEFAULT '',
