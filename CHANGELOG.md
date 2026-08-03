@@ -8,6 +8,59 @@ notable changes.
 
 ## [Unreleased]
 
+## [0.125.0] — 2026-08-03
+
+A release about agents being able to act on what the brain tells them. Found by
+calling all 48 MCP tools over stdio during a wiring audit — no test covered any
+of it, because every affected path *succeeded* at being unhelpful.
+
+### Fixed
+
+- **Nine MCP tools reported `-32603 internal error` for failures the caller
+  could fix** (#354, #355, #356). An unparseable timestamp, an invalid enum, an
+  id that does not exist, a missing file, no `.mnemos/` project. An agent told
+  `invalid risk_level "audit"` retries with a valid one; an agent told
+  `internal error` has no next move at all.
+
+  | tool | before | after |
+  |---|---|---|
+  | `record_decision` | `-32603 internal error` | `-32602 invalid risk_level "audit"` |
+  | `record_outcome` | `-32603 internal error` | `-32602 invalid outcome result "audit"` |
+  | `memory_resolve_dissonance` | `-32603 internal error` | `-32602 winner_id and loser_id must differ` |
+  | `recall_at_time`, `remember_episode` | `-32603 internal error` | `-32602` naming the unparseable timestamp |
+  | `get_decision` | `-32603 internal error` | `-32001 no decision with id …` |
+  | `watch_file` | `-32603 internal error` | `-32602 no such file: … (on the SERVER's filesystem)` |
+  | `ingest_git_log`, `ingest_git_prs` | `-32603 internal error` | `-32602` naming what to run |
+
+  **Cause.** axi flattens an executor error into `FailureReason{Code, Message}`
+  — two plain strings, with no hook for the executor to influence either — and
+  `dispatchAxiTool` re-wrapped that as a bare `fmt.Errorf`, so any Go error type
+  was gone before the MCP boundary decided what the caller sees. The by-id
+  belief tools escaped only because their checks run *before* dispatch.
+
+  The fix marks an error as caller-fixable in a way that survives **both**
+  routes a tool error can take: it unwraps to a `*protocol.Error` for the direct
+  path, and carries a marker through the kernel's string flattening for the
+  other. Covering one and not the other was a real defect in two earlier
+  attempts at this, both caught by re-running the tool sweep rather than by
+  reasoning about the code.
+
+  **Unmarked errors are untouched and still `-32603`**, so the failure direction
+  is "stays opaque", never "leaks". That property is what makes this safe beside
+  the sanitiser's reason for existing: redacting DSNs from error paths was
+  itself a past fix (#282), and a blanket passthrough would re-open it. Marking
+  is opt-in per call site, so exposing a message is a deliberate act by someone
+  who has read what it contains — pinned by tests asserting that plain, DSN,
+  filesystem-path and kernel-internal errors all stay opaque.
+
+  `watch_file` is deliberately not marked at its source: that error quotes the
+  *resolved* absolute path, which would disclose the server's working directory
+  to a remote peer. The handler reports only the path the caller supplied.
+
+  Correcting the issue as originally filed: the server log was never affected.
+  The MCP library logs the full error to stderr before replacing it, and always
+  did. Only the caller was blind.
+
 ## [0.124.0] — 2026-08-03
 
 Completes the half-life work that #331, #334 and #336 started. The value was
