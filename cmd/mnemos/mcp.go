@@ -15,6 +15,7 @@ import (
 
 	"go.klarlabs.de/bolt"
 	mcp "go.klarlabs.de/mcp"
+	"go.klarlabs.de/mcp/protocol"
 	mnemos "go.klarlabs.de/mnemos"
 	"go.klarlabs.de/mnemos/internal/domain"
 	"go.klarlabs.de/mnemos/internal/embedding"
@@ -518,6 +519,9 @@ func handleMCP(args []string) {
 		Description("Ingest merged GitHub pull requests from the project as events. Requires gh CLI authenticated for the repo's remote. Idempotent — already-ingested PR numbers are skipped.").
 		OutputSchema(mcpIngestGitPRsOutput{}).
 		Handler(func(ctx context.Context, input mcpIngestGitPRsInput) (mcpIngestGitPRsOutput, error) {
+			if err := gitIngestPreconditions(ctx, true); err != nil {
+				return mcpIngestGitPRsOutput{}, err
+			}
 			if kernel != nil {
 				return dispatchAxiTool[mcpIngestGitPRsOutput](ctx, kernel, nil, "ingest_git_prs", input)
 			}
@@ -528,6 +532,9 @@ func handleMCP(args []string) {
 		Description("Ingest recent git commits from the project repository as events so they appear in queries. Idempotent — already-ingested commits are skipped by SHA.").
 		OutputSchema(mcpIngestGitLogOutput{}).
 		Handler(func(ctx context.Context, input mcpIngestGitLogInput) (mcpIngestGitLogOutput, error) {
+			if err := gitIngestPreconditions(ctx, false); err != nil {
+				return mcpIngestGitLogOutput{}, err
+			}
 			if kernel != nil {
 				return dispatchAxiTool[mcpIngestGitLogOutput](ctx, kernel, nil, "ingest_git_log", input)
 			}
@@ -1001,12 +1008,21 @@ func runPRContextIngest(projectRoot, actor string) {
 }
 
 func mcpRunIngestGitPRs(ctx context.Context, actor string, input mcpIngestGitPRsInput) (mcpIngestGitPRsOutput, error) {
+	// Every precondition here is USER-FIXABLE, so each returns a *protocol.Error
+	// rather than a bare Go error. publicError replaces a bare error with
+	// "-32603 internal error", which reads as a server fault and tells the
+	// caller nothing they can act on — the same opacity that made #341 take
+	// weeks to characterise. A *protocol.Error passes through verbatim.
 	_, projectRoot, ok := findProjectDB()
 	if !ok {
-		return mcpIngestGitPRsOutput{}, fmt.Errorf("no project (.mnemos/) found — run 'mnemos init' first")
+		return mcpIngestGitPRsOutput{}, protocol.NewInvalidParams(
+			"no project found: this tool reads the repo's .mnemos/ project brain, and none was " +
+				"found at or above the server's working directory. Run 'mnemos init --project' in the repo.")
 	}
 	if !ghAvailable(ctx) {
-		return mcpIngestGitPRsOutput{}, fmt.Errorf("gh CLI not installed or not authenticated for github.com")
+		return mcpIngestGitPRsOutput{}, protocol.NewInvalidParams(
+			"the gh CLI is not installed or not authenticated for github.com. Install it and run " +
+				"'gh auth login', or ingest commits instead with ingest_git_log.")
 	}
 	w, err := openWriter(ctx)
 	if err != nil {
@@ -1021,13 +1037,56 @@ func mcpRunIngestGitPRs(ctx context.Context, actor string, input mcpIngestGitPRs
 	return mcpIngestGitPRsOutput{Ingested: ingested, Skipped: skipped}, nil
 }
 
-func mcpRunIngestGitLog(ctx context.Context, actor string, input mcpIngestGitLogInput) (mcpIngestGitLogOutput, error) {
+// gitIngestPreconditions reports the user-fixable reasons ingest_git_log /
+// ingest_git_prs cannot run, as *protocol.Error values.
+//
+// It is called in the TOOL HANDLER, before dispatchAxiTool, and that placement
+// is the whole point. An error returned from inside a kernel executor is
+// flattened by the kernel into FailureReason{Code, Message} — two plain strings
+// — and dispatchAxiTool re-wraps that as a bare fmt.Errorf, so the *protocol.Error
+// type is gone by the time publicError sees it and the caller gets
+// "-32603 internal error" for a condition they could have fixed in ten seconds.
+// That opacity is what made #341 take weeks to characterise, and it applies to
+// every kernel-dispatched tool, not just these two.
+//
+// Surfacing kernel failure messages wholesale would be the wrong fix: publicError
+// exists so internal detail (DSNs above all) cannot leak, and redacting DSNs in
+// error paths was itself a past fix. So the user-fixable checks live out here,
+// where returning a typed error is a deliberate act rather than a blanket policy.
+func gitIngestPreconditions(ctx context.Context, needGH bool) error {
 	_, projectRoot, ok := findProjectDB()
 	if !ok {
-		return mcpIngestGitLogOutput{}, fmt.Errorf("no project (.mnemos/) found — run 'mnemos init' first")
+		return protocol.NewInvalidParams(
+			"no project found: this tool reads the repo's .mnemos/ project brain, and none was " +
+				"found at or above the server's working directory. Run 'mnemos init --project' in the repo.")
+	}
+	if needGH {
+		if !ghAvailable(ctx) {
+			return protocol.NewInvalidParams(
+				"the gh CLI is not installed or not authenticated for github.com. Install it and run " +
+					"'gh auth login', or ingest commits instead with ingest_git_log.")
+		}
+		return nil
 	}
 	if !repoIsGit(projectRoot) {
-		return mcpIngestGitLogOutput{}, fmt.Errorf("project root %s is not a git repository", projectRoot)
+		return protocol.NewInvalidParams(fmt.Sprintf(
+			"project root %s is not a git repository, so there is no commit history to ingest", projectRoot))
+	}
+	return nil
+}
+
+func mcpRunIngestGitLog(ctx context.Context, actor string, input mcpIngestGitLogInput) (mcpIngestGitLogOutput, error) {
+	// See mcpRunIngestGitPRs: user-fixable preconditions must not be flattened
+	// into -32603 by publicError.
+	_, projectRoot, ok := findProjectDB()
+	if !ok {
+		return mcpIngestGitLogOutput{}, protocol.NewInvalidParams(
+			"no project found: this tool reads the repo's .mnemos/ project brain, and none was " +
+				"found at or above the server's working directory. Run 'mnemos init --project' in the repo.")
+	}
+	if !repoIsGit(projectRoot) {
+		return mcpIngestGitLogOutput{}, protocol.NewInvalidParams(fmt.Sprintf(
+			"project root %s is not a git repository, so there is no commit history to ingest", projectRoot))
 	}
 	w, err := openWriter(ctx)
 	if err != nil {
