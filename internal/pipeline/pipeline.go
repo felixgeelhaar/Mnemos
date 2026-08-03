@@ -229,9 +229,20 @@ func PersistArtifacts(ctx context.Context, conn *store.Conn, events []domain.Eve
 	// Only set when unset, so an explicit half-life (human verification via
 	// MarkVerified) always wins.
 	for i := range enriched {
-		if enriched[i].HalfLifeDays == 0 {
-			enriched[i].HalfLifeDays = extract.HalfLifeFor(string(enriched[i].Type), enriched[i].Text)
+		// Skip anything already decided. A non-zero half-life is a human
+		// override via MarkVerified or an applied volatile verdict; a non-empty
+		// classifier is an applied verdict whose value happens to be 0, i.e.
+		// "read and judged durable". Testing HalfLifeDays alone cannot tell that
+		// last case from "never looked at" — the collision ADR 0025 exists to
+		// remove — so re-running the classifier over it forever was the old
+		// behaviour here.
+		if enriched[i].HalfLifeDays != 0 || enriched[i].HalfLifeClassified() {
+			continue
 		}
+		enriched[i].HalfLifeDays = extract.HalfLifeFor(string(enriched[i].Type), enriched[i].Text)
+		// Stamped even when the verdict is 0. That is the entire point: a
+		// durable verdict and an absent one must stop looking identical.
+		enriched[i].HalfLifeClassifier = extract.VolatilityClassifierVersion
 	}
 
 	groups := groupClaimsByCreatedBy(enriched)

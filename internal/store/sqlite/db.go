@@ -91,6 +91,10 @@ CREATE TABLE IF NOT EXISTS claims (
 	last_verified TEXT NOT NULL DEFAULT '',
 	verify_count INTEGER NOT NULL DEFAULT 0,
 	half_life_days REAL NOT NULL DEFAULT 0,
+	-- half_life_classifier (ADR 0025): which classifier assigned half_life_days.
+	-- '' means none did. That is a different fact from "the classifier read this
+	-- and judged it durable", which also stores 0.
+	half_life_classifier TEXT NOT NULL DEFAULT '',
 	scope_service TEXT NOT NULL DEFAULT '',
 	scope_env TEXT NOT NULL DEFAULT '',
 	scope_team TEXT NOT NULL DEFAULT '',
@@ -678,6 +682,11 @@ var expectedColumns = []addMissingColumn{
 	// exists, so without this entry every pre-existing brain would fail on the
 	// first read with "no such column: durability".
 	{"claims", "durability", "TEXT NOT NULL DEFAULT ''"},
+	// v24 - half-life classification provenance (ADR 0025). Without this entry
+	// every pre-existing brain fails its first read with "no such column", the
+	// same trap durability documents above: CREATE TABLE IF NOT EXISTS does not
+	// add columns to a table that already exists.
+	{"claims", "half_life_classifier", "TEXT NOT NULL DEFAULT ''"},
 }
 
 // v1Columns is the legacy alias kept for any external callers (and for

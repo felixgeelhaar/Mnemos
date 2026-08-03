@@ -51,10 +51,10 @@ const claimUpsertSQL = `
 INSERT INTO claims (id, text, type, confidence, status, created_at, created_by, valid_from, trust_score, valid_to, half_life_days, subject_class, durability, confidence_components,
                     test_id, test_requirement_ref, test_author, test_last_modified, test_last_run_at, test_pass_count, test_fail_count,
                     scope_service, scope_env, scope_team,
-                    source_document, source_type, source_authority, liveness, last_executed, citation_count, provenance_rationale, visibility)
+                    source_document, source_type, source_authority, liveness, last_executed, citation_count, provenance_rationale, visibility, half_life_classifier)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?)
+        ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE
   text = VALUES(text),
   type = VALUES(type),
@@ -62,6 +62,9 @@ ON DUPLICATE KEY UPDATE
   status = VALUES(status),
   valid_from = VALUES(valid_from),
   half_life_days = CASE WHEN VALUES(half_life_days) > 0 THEN VALUES(half_life_days) ELSE half_life_days END,
+  -- Preserved on empty for the same reason: a writer carrying no classifier
+  -- verdict must not erase one, or coverage would decay under write traffic.
+  half_life_classifier = CASE WHEN VALUES(half_life_classifier) <> '' THEN VALUES(half_life_classifier) ELSE half_life_classifier END,
   subject_class = VALUES(subject_class),
   durability = VALUES(durability),
   confidence_components = VALUES(confidence_components),
@@ -151,6 +154,7 @@ VALUES (?, ?, ?, ?, ?, ?)`
 			// side normalises instead (see scanClaimRow), so no caller ever sees
 			// an empty audience.
 			string(claim.Visibility),
+			claim.HalfLifeClassifier,
 		); err != nil {
 			return fmt.Errorf("upsert claim %s: %w", claim.ID, err)
 		}
@@ -696,7 +700,7 @@ func nullTime(t time.Time) any {
 var claimColumnNames = []string{
 	"id", "text", "type", "confidence", "status", "created_at", "created_by",
 	"trust_score", "valid_from", "valid_to", "last_verified", "verify_count",
-	"half_life_days", "lifecycle", "subject_class", "durability",
+	"half_life_days", "half_life_classifier", "lifecycle", "subject_class", "durability",
 	"confidence_components",
 	"test_id", "test_requirement_ref", "test_author", "test_last_modified",
 	"test_last_run_at", "test_pass_count", "test_fail_count",
@@ -776,7 +780,7 @@ func scanClaimRow(rows *sql.Rows) (domain.Claim, error) {
 	if err := rows.Scan(
 		&c.ID, &c.Text, &typ, &c.Confidence, &status,
 		&c.CreatedAt, &c.CreatedBy, &c.TrustScore, &validFrom, &validTo, &lastVerified, &c.VerifyCount,
-		&c.HalfLifeDays, &lifecycle, &subjectClass, &durability, &confidenceComponents,
+		&c.HalfLifeDays, &c.HalfLifeClassifier, &lifecycle, &subjectClass, &durability, &confidenceComponents,
 		&c.TestID, &c.TestRequirementRef, &c.TestAuthor, &testLastModified, &testLastRunAt, &c.TestPassCount, &c.TestFailCount,
 		&scopeService, &scopeEnv, &scopeTeam,
 		&sourceDocument, &sourceType, &c.SourceAuthority, &liveness,

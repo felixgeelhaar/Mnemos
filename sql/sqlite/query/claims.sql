@@ -15,8 +15,8 @@
 -- not confident about), so a plain excluded.half_life_days would reset a
 -- human override set through MarkVerified the next time the same claim
 -- came back through ingest. Same COALESCE semantics as MarkClaimVerified.
-INSERT INTO claims (id, text, type, confidence, status, created_at, created_by, valid_from, half_life_days, scope_service, scope_env, scope_team, source_document, source_type, source_authority, liveness, last_executed, citation_count, provenance_rationale, test_id, test_requirement_ref, test_author, test_last_modified, test_last_run_at, test_pass_count, test_fail_count, visibility, confidence_components, lifecycle, subject_class, durability)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO claims (id, text, type, confidence, status, created_at, created_by, valid_from, half_life_days, half_life_classifier, scope_service, scope_env, scope_team, source_document, source_type, source_authority, liveness, last_executed, citation_count, provenance_rationale, test_id, test_requirement_ref, test_author, test_last_modified, test_last_run_at, test_pass_count, test_fail_count, visibility, confidence_components, lifecycle, subject_class, durability)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   text = excluded.text,
   type = excluded.type,
@@ -26,6 +26,10 @@ ON CONFLICT(id) DO UPDATE SET
   created_by = excluded.created_by,
   valid_from = excluded.valid_from,
   half_life_days = CASE WHEN excluded.half_life_days > 0 THEN excluded.half_life_days ELSE claims.half_life_days END,
+  -- Preserved on empty for the same reason half_life_days is preserved on zero:
+  -- a writer that carries no classifier verdict must not erase one, or the
+  -- coverage number would decay under ordinary write traffic (ADR 0025).
+  half_life_classifier = CASE WHEN excluded.half_life_classifier <> '' THEN excluded.half_life_classifier ELSE claims.half_life_classifier END,
   -- Scope, provenance and visibility are PRESERVED when the incoming value is
   -- zero, generalising the half_life_days rule above (#334, #345, #346).
   --
@@ -89,7 +93,7 @@ ON CONFLICT(claim_id, event_id) DO NOTHING;
 
 -- name: ListAllClaims :many
 SELECT id, text, type, confidence, status, created_at, created_by, trust_score,
-       valid_from, valid_to, last_verified, verify_count, half_life_days,
+       valid_from, valid_to, last_verified, verify_count, half_life_days, half_life_classifier,
        scope_service, scope_env, scope_team,
        source_document, source_type, source_authority, liveness,
        last_executed, citation_count, provenance_rationale,
@@ -105,7 +109,7 @@ ORDER BY created_at ASC;
 -- previous implementation called ListAllClaims and filtered in Go,
 -- which scaled O(n) per invocation.
 SELECT id, text, type, confidence, status, created_at, created_by, trust_score,
-       valid_from, valid_to, last_verified, verify_count, half_life_days,
+       valid_from, valid_to, last_verified, verify_count, half_life_days, half_life_classifier,
        scope_service, scope_env, scope_team,
        source_document, source_type, source_authority, liveness,
        last_executed, citation_count, provenance_rationale,

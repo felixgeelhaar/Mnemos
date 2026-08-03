@@ -54,10 +54,10 @@ func claimUpsertSQL(ns string) string {
 INSERT INTO %s (id, text, type, confidence, status, created_at, created_by, valid_from, trust_score, valid_to, half_life_days, lifecycle, subject_class, durability, confidence_components,
                 test_id, test_requirement_ref, test_author, test_last_modified, test_last_run_at, test_pass_count, test_fail_count,
                 scope_service, scope_env, scope_team,
-                source_document, source_type, source_authority, liveness, last_executed, citation_count, provenance_rationale, visibility)
+                source_document, source_type, source_authority, liveness, last_executed, citation_count, provenance_rationale, visibility, half_life_classifier)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, NULL, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
         $21, $22, $23,
-        $24, $25, $26, $27, $28, $29, $30, $31)
+        $24, $25, $26, $27, $28, $29, $30, $31, $32)
 ON CONFLICT (id) DO UPDATE SET
   text = EXCLUDED.text,
   type = EXCLUDED.type,
@@ -65,6 +65,9 @@ ON CONFLICT (id) DO UPDATE SET
   status = EXCLUDED.status,
   valid_from = EXCLUDED.valid_from,
   half_life_days = CASE WHEN EXCLUDED.half_life_days > 0 THEN EXCLUDED.half_life_days ELSE claims.half_life_days END,
+  -- Preserved on empty for the same reason: a writer carrying no classifier
+  -- verdict must not erase one, or coverage would decay under write traffic.
+  half_life_classifier = CASE WHEN EXCLUDED.half_life_classifier <> '' THEN EXCLUDED.half_life_classifier ELSE claims.half_life_classifier END,
   lifecycle = EXCLUDED.lifecycle,
   subject_class = EXCLUDED.subject_class,
   durability = EXCLUDED.durability,
@@ -156,6 +159,7 @@ VALUES ($1, $2, $3, $4, $5, $6)`, qualify(r.ns, "claim_status_history"))
 			// side normalises instead (see scanClaimRow), so no caller ever sees
 			// an empty audience.
 			string(claim.Visibility),
+			claim.HalfLifeClassifier,
 		); err != nil {
 			return fmt.Errorf("upsert claim %s: %w", claim.ID, err)
 		}
@@ -726,7 +730,7 @@ func nullTime(t time.Time) any {
 var claimColumnNames = []string{
 	"id", "text", "type", "confidence", "status", "created_at", "created_by",
 	"trust_score", "valid_from", "valid_to", "last_verified", "verify_count",
-	"half_life_days", "lifecycle", "subject_class",
+	"half_life_days", "half_life_classifier", "lifecycle", "subject_class",
 	"durability", "confidence_components",
 	"test_id", "test_requirement_ref", "test_author", "test_last_modified",
 	"test_last_run_at", "test_pass_count", "test_fail_count",
@@ -797,7 +801,7 @@ func scanClaimRow(rows *sql.Rows) (domain.Claim, error) {
 	if err := rows.Scan(
 		&c.ID, &c.Text, &typ, &c.Confidence, &status,
 		&c.CreatedAt, &c.CreatedBy, &c.TrustScore, &validFrom, &validTo, &lastVerified, &c.VerifyCount,
-		&c.HalfLifeDays, &lifecycle, &subjectClass, &durability, &confidenceComponents,
+		&c.HalfLifeDays, &c.HalfLifeClassifier, &lifecycle, &subjectClass, &durability, &confidenceComponents,
 		&c.TestID, &c.TestRequirementRef, &c.TestAuthor, &testLastModified, &testLastRunAt, &c.TestPassCount, &c.TestFailCount,
 		&scopeService, &scopeEnv, &scopeTeam,
 		&sourceDocument, &sourceType, &c.SourceAuthority, &liveness,

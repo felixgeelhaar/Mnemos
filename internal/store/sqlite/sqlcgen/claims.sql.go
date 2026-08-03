@@ -89,7 +89,7 @@ func (q *Queries) DeleteClaimStatusHistoryByClaimID(ctx context.Context, claimID
 
 const listAllClaims = `-- name: ListAllClaims :many
 SELECT id, text, type, confidence, status, created_at, created_by, trust_score,
-       valid_from, valid_to, last_verified, verify_count, half_life_days,
+       valid_from, valid_to, last_verified, verify_count, half_life_days, half_life_classifier,
        scope_service, scope_env, scope_team,
        source_document, source_type, source_authority, liveness,
        last_executed, citation_count, provenance_rationale,
@@ -123,6 +123,7 @@ func (q *Queries) ListAllClaims(ctx context.Context) ([]Claim, error) {
 			&i.LastVerified,
 			&i.VerifyCount,
 			&i.HalfLifeDays,
+			&i.HalfLifeClassifier,
 			&i.ScopeService,
 			&i.ScopeEnv,
 			&i.ScopeTeam,
@@ -284,7 +285,7 @@ func (q *Queries) ListClaimTrustInputsForClaims(ctx context.Context, claimIds []
 
 const listClaimsByTestRequirementRef = `-- name: ListClaimsByTestRequirementRef :many
 SELECT id, text, type, confidence, status, created_at, created_by, trust_score,
-       valid_from, valid_to, last_verified, verify_count, half_life_days,
+       valid_from, valid_to, last_verified, verify_count, half_life_days, half_life_classifier,
        scope_service, scope_env, scope_team,
        source_document, source_type, source_authority, liveness,
        last_executed, citation_count, provenance_rationale,
@@ -324,6 +325,7 @@ func (q *Queries) ListClaimsByTestRequirementRef(ctx context.Context, testRequir
 			&i.LastVerified,
 			&i.VerifyCount,
 			&i.HalfLifeDays,
+			&i.HalfLifeClassifier,
 			&i.ScopeService,
 			&i.ScopeEnv,
 			&i.ScopeTeam,
@@ -421,8 +423,8 @@ func (q *Queries) UpdateClaimTrust(ctx context.Context, arg UpdateClaimTrustPara
 }
 
 const upsertClaim = `-- name: UpsertClaim :exec
-INSERT INTO claims (id, text, type, confidence, status, created_at, created_by, valid_from, half_life_days, scope_service, scope_env, scope_team, source_document, source_type, source_authority, liveness, last_executed, citation_count, provenance_rationale, test_id, test_requirement_ref, test_author, test_last_modified, test_last_run_at, test_pass_count, test_fail_count, visibility, confidence_components, lifecycle, subject_class, durability)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO claims (id, text, type, confidence, status, created_at, created_by, valid_from, half_life_days, half_life_classifier, scope_service, scope_env, scope_team, source_document, source_type, source_authority, liveness, last_executed, citation_count, provenance_rationale, test_id, test_requirement_ref, test_author, test_last_modified, test_last_run_at, test_pass_count, test_fail_count, visibility, confidence_components, lifecycle, subject_class, durability)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   text = excluded.text,
   type = excluded.type,
@@ -432,6 +434,10 @@ ON CONFLICT(id) DO UPDATE SET
   created_by = excluded.created_by,
   valid_from = excluded.valid_from,
   half_life_days = CASE WHEN excluded.half_life_days > 0 THEN excluded.half_life_days ELSE claims.half_life_days END,
+  -- Preserved on empty for the same reason half_life_days is preserved on zero:
+  -- a writer that carries no classifier verdict must not erase one, or the
+  -- coverage number would decay under ordinary write traffic (ADR 0025).
+  half_life_classifier = CASE WHEN excluded.half_life_classifier <> '' THEN excluded.half_life_classifier ELSE claims.half_life_classifier END,
   -- Scope, provenance and visibility are PRESERVED when the incoming value is
   -- zero, generalising the half_life_days rule above (#334, #345, #346).
   --
@@ -482,6 +488,7 @@ type UpsertClaimParams struct {
 	CreatedBy            string  `json:"created_by"`
 	ValidFrom            string  `json:"valid_from"`
 	HalfLifeDays         float64 `json:"half_life_days"`
+	HalfLifeClassifier   string  `json:"half_life_classifier"`
 	ScopeService         string  `json:"scope_service"`
 	ScopeEnv             string  `json:"scope_env"`
 	ScopeTeam            string  `json:"scope_team"`
@@ -533,6 +540,7 @@ func (q *Queries) UpsertClaim(ctx context.Context, arg UpsertClaimParams) error 
 		arg.CreatedBy,
 		arg.ValidFrom,
 		arg.HalfLifeDays,
+		arg.HalfLifeClassifier,
 		arg.ScopeService,
 		arg.ScopeEnv,
 		arg.ScopeTeam,

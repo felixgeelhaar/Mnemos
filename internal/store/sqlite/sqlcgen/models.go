@@ -44,6 +44,7 @@ type Claim struct {
 	LastVerified         string         `json:"last_verified"`
 	VerifyCount          int64          `json:"verify_count"`
 	HalfLifeDays         float64        `json:"half_life_days"`
+	HalfLifeClassifier   string         `json:"half_life_classifier"`
 	ScopeService         string         `json:"scope_service"`
 	ScopeEnv             string         `json:"scope_env"`
 	ScopeTeam            string         `json:"scope_team"`

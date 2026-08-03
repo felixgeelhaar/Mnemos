@@ -174,6 +174,7 @@ type storedClaim struct {
 	LastVerified         time.Time
 	VerifyCount          int
 	HalfLifeDays         float64
+	HalfLifeClassifier   string
 	Scope                domain.Scope
 	ConfidenceComponents map[string]float64
 	Lifecycle            domain.ClaimLifecycle
@@ -225,6 +226,7 @@ func (c storedClaim) toDomain() domain.Claim {
 		LastVerified:         c.LastVerified,
 		VerifyCount:          c.VerifyCount,
 		HalfLifeDays:         c.HalfLifeDays,
+		HalfLifeClassifier:   c.HalfLifeClassifier,
 		Scope:                c.Scope,
 		ConfidenceComponents: components,
 		Lifecycle:            c.Lifecycle,
@@ -294,6 +296,7 @@ func storedClaimFromDomain(c domain.Claim) storedClaim {
 		LastVerified:         c.LastVerified.UTC(),
 		VerifyCount:          c.VerifyCount,
 		HalfLifeDays:         c.HalfLifeDays,
+		HalfLifeClassifier:   c.HalfLifeClassifier,
 		Scope:                c.Scope,
 		ConfidenceComponents: components,
 		Lifecycle:            c.Lifecycle,
