@@ -8,6 +8,74 @@ notable changes.
 
 ## [Unreleased]
 
+## [0.126.0] — 2026-08-04
+
+Contradiction precision. Found by auditing what the brain actually believes it
+disagrees about, rather than by any test — every affected path was producing a
+confident, well-formed, wrong answer.
+
+### Fixed
+
+- **Numeric contradictions fired on shared generic vocabulary** (#359, #360).
+  `detectNumericDivergence` produced **47.5% of every live contradiction edge**
+  on a real 68,670-belief brain, and its subject anchor was satisfied by the
+  most common words in a software corpus:
+
+  ```
+  "245 tests green, including the existing state-file guards"
+      vs "Full suite green (1950 tests)"
+  ```
+
+  Different suites in different projects. Shared word tokens `{tests, green}`
+  scored `2/4 = 0.50` and `2/6 = 0.33` against bars of exactly `0.50` and
+  `0.30`. The guard measured *how much* was shared and never how
+  **discriminative** it was.
+
+  Three changes, none sufficient alone: the anchor ratio goes to `0.70`, the
+  coverage bar to `0.40`, and a new absolute floor of **3 word tokens** rejects
+  the trivially-scoring short claim — `"25 tests green"` has two word tokens, so
+  *any* shared pair scores `1.00` against it and no ratio can help. Three is the
+  largest floor that still admits the canonical true positive, `"the user has 12
+  prior refunds"` (`{user, prior, refunds}`); four loses it. The thresholds were
+  swept against the real corpus rather than chosen.
+
+- **A bound was compared as a measurement** (#359, #361).
+  `require: {"php": ">=8.1"}` and `"PHP 8.3"` **agree** — one is a constraint the
+  other satisfies. Comparing them as values made them contradict, and that one
+  shape was **67 of the 75** edges surviving the anchor fix; a dependency
+  constraint beside an installed version is among the most common patterns in a
+  software brain.
+
+  A number introduced by a comparison operator is now excluded from numeric
+  divergence entirely, following the rule already applied to `#`-identifiers and
+  locators: a number that is not a point measurement does not participate.
+  Symbolic (`>=`, `<=`, `>`, `<`, `^`, `~`) and word forms (`"at least 30 days"`)
+  both covered. `">=8.1"` vs `">=9.0"` is no longer flagged — rare, and it errs
+  toward silence, which is the direction this detector should fail in.
+
+  Combined effect on the real corpus: **1,539 → 10** numeric edges. The canonical
+  true positive survives, the 133 eval cases are unchanged, and both changes are
+  mutation-verified against the un-patched detector.
+
+### Known limitation
+
+The 10 edges that remain are one class, and they are not fixable by tuning:
+
+```
+"Icons drawn and pushed. 423 tests green"  vs  "1290 tests, green, pushed"
+```
+
+Different projects that **genuinely** share topic vocabulary — the claims really
+are about the same *kind* of thing, so a tighter anchor would start costing true
+positives instead. Separating them needs project provenance, and none exists
+today: `source_document` and `scope_service` are empty on all 68,670 live
+beliefs. Tracked on #359.
+
+Both changes affect what **future** ingestion flags. Contradiction edges already
+recorded are untouched; clearing those needs a `relate` re-run over the corpus,
+which is a bulk rewrite of the relationship graph and is deliberately left as an
+explicit decision rather than a release side effect.
+
 ## [0.125.0] — 2026-08-03
 
 A release about agents being able to act on what the brain tells them. Found by
