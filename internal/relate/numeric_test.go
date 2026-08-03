@@ -1,6 +1,7 @@
 package relate
 
 import (
+	"strings"
 	"testing"
 
 	"go.klarlabs.de/mnemos/internal/domain"
@@ -221,5 +222,55 @@ func TestDetectNumericDivergence_KeepsTheCanonicalTruePositive(t *testing.T) {
 	bTok, _ := contentTokensAndPolarity(b)
 	if !detectNumericDivergence(a, b, aTok, bTok) {
 		t.Error("the canonical numeric contradiction was lost to the tightened anchors")
+	}
+}
+
+// A bound and a value that satisfies it do not disagree.
+//
+// `require: {"php": ">=8.1"}` next to "PHP 8.3" is the single most common shape
+// among the numeric edges that survived the #360 anchor tightening — 67 of 75.
+// The two claims AGREE; comparing a constraint as though it were a measurement
+// is what made them contradict.
+func TestDetectNumericDivergence_BoundIsNotAMeasurement(t *testing.T) {
+	cases := []struct{ name, a, b string }{
+		{
+			"dependency constraint vs installed version",
+			`Zero runtime dependencies (` + "`" + `require: {"php": ">=8.1"}` + "`" + ` only); DDD layering; TDD`,
+			"PHP 8.3, zero runtime dependencies (composer requires only `php`), DDD layering",
+		},
+		{
+			"caret range vs resolved version",
+			"the parser package is pinned at ^4.2 in the manifest",
+			"the parser package resolved to 4.9 in the manifest",
+		},
+		{
+			"word-form bound vs value",
+			"the retention window must be at least 30 days for audit",
+			"the retention window is 90 days for audit",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			aTok, _ := contentTokensAndPolarity(tc.a)
+			bTok, _ := contentTokensAndPolarity(tc.b)
+			if detectNumericDivergence(tc.a, tc.b, aTok, bTok) {
+				t.Errorf("a bound was compared as a value:\n  %q\n  %q", tc.a, tc.b)
+			}
+		})
+	}
+}
+
+// The exclusion must not swallow ordinary measurements that merely sit near a
+// symbol, or it would silence the detector wholesale.
+func TestIsBounded_LeavesPlainMeasurementsAlone(t *testing.T) {
+	plain := "the user has 12 prior refunds"
+	if isBounded(plain, strings.Index(plain, "12")-1) {
+		t.Error("a plain measurement was treated as a bound")
+	}
+	a, b := "the user has 12 prior refunds", "the user has 0 prior refunds"
+	aTok, _ := contentTokensAndPolarity(a)
+	bTok, _ := contentTokensAndPolarity(b)
+	if !detectNumericDivergence(a, b, aTok, bTok) {
+		t.Error("the canonical true positive was lost to the bound exclusion")
 	}
 }

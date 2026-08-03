@@ -95,6 +95,9 @@ func extractNumerics(text string) []numericValue {
 			if isLocator(text, idx, m[3]) {
 				continue
 			}
+			if isBounded(text, idx) {
+				continue
+			}
 		}
 		raw := m[0]
 		currency := strings.ToLower(strings.TrimSpace(m[1]))
@@ -325,6 +328,59 @@ func wordTokens(tokens map[string]struct{}) map[string]struct{} {
 // the colon must sit tight against an identifier character: "timeout: 30"
 // (colon, space) is a label introducing a value, which is how measurements
 // are ordinarily written.
+// isBounded reports whether the number at idx is introduced by a comparison
+// operator, making it a BOUND rather than an asserted measurement.
+//
+// A bound and a value that satisfies it do not disagree: `require: {"php":
+// ">=8.1"}` and "PHP 8.3" are consistent, and a dependency constraint next to
+// an installed version is one of the most common shapes in a software brain.
+// Comparing them as equals made them contradict — 67 of the 75 numeric edges
+// that survived the #360 anchor tightening were this one shape.
+//
+// Excluded entirely rather than compared as an interval, following the same
+// rule as `#`-identifiers and locators above: a number that is not a point
+// measurement does not participate in numeric divergence. The cost is that
+// ">=8.1" vs ">=9.0" is no longer detected as a conflict; that is rare, and it
+// errs toward silence, which is the direction this detector should fail in.
+//
+// idx is the START OF THE MATCH — the separator character, not the first digit
+// (see isLocator). Scanning left from there skips the separator itself.
+func isBounded(text string, idx int) bool {
+	// Anchor on the first DIGIT of the match, not on idx. idx is the separator
+	// the regex consumes ahead of the number, so scanning left from it steps
+	// straight over the operator that is the whole signal: in "^4.2" the
+	// separator IS the caret. Getting this wrong silently matched nothing for
+	// every symbolic bound except ">=", where the '>' happened to sit one
+	// further left.
+	d := idx
+	for d < len(text) && (text[d] < '0' || text[d] > '9') {
+		d++
+	}
+	if d >= len(text) {
+		return false
+	}
+	i := d
+	for i > 0 && (text[i-1] == ' ' || text[i-1] == '\t') {
+		i--
+	}
+	if i > 0 {
+		switch text[i-1] {
+		case '>', '<', '=', '^', '~':
+			return true
+		}
+	}
+	// Word forms, so "at least 30 days" is caught alongside ">=30 days".
+	head := strings.ToLower(text[:i])
+	for _, w := range []string{"at least", "at most", "no more than", "no fewer than",
+		"minimum", "maximum", "min", "max", "up to", "over", "under", "above", "below",
+		"more than", "fewer than", "less than", "greater than"} {
+		if strings.HasSuffix(strings.TrimRight(head, " \t"), w) {
+			return true
+		}
+	}
+	return false
+}
+
 func isLocator(text string, idx int, unitSuffix string) bool {
 	// Only a RECOGNIZED unit vetoes the exclusion. A guessed word does not:
 	// "render.go:133 writes the header" would otherwise keep 133 as a quantity
