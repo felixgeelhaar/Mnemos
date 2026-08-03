@@ -635,6 +635,16 @@ func handleMCP(args []string) {
 			if tenantRequired {
 				return mcpWatchFileOutput{}, errors.New("watch_file is not available on a multi-tenant server")
 			}
+			// A path the caller can see is wrong is reported as such, but the
+			// message names only what THEY supplied. resolveWatchPath's own
+			// errors quote the RESOLVED absolute path, which would disclose the
+			// server's working directory to a remote peer, and it is the
+			// containment check besides (#355).
+			if _, err := os.Lstat(input.Path); err != nil && os.IsNotExist(err) {
+				return mcpWatchFileOutput{}, protocol.NewInvalidParams(
+					"no such file: " + input.Path + " — watch_file registers a file on the SERVER's " +
+						"filesystem, inside its project root, not one on the caller's machine")
+			}
 			if kernel != nil {
 				return dispatchAxiTool[mcpWatchFileOutput](ctx, kernel, nil, "watch_file", input)
 			}
@@ -845,7 +855,14 @@ func handleMCP(args []string) {
 			if err != nil {
 				return mcpDecisionOutput{}, err
 			}
-			return mcpGetDecision(ctx, mem, input)
+			out, err := mcpGetDecision(ctx, mem, input)
+			if err != nil && strings.Contains(err.Error(), "not found") {
+				// An id that does not exist is the caller's to fix. -32603 reads
+				// as a server fault and leaves an agent with no next move (#355).
+				return mcpDecisionOutput{}, protocol.NewNotFound(
+					"no decision with id " + input.ID)
+			}
+			return out, err
 		})
 
 	srv.Tool("recall").
@@ -1631,6 +1648,14 @@ func mcpRunRecordDecision(ctx context.Context, actor string, input mcpRecordDeci
 		return mcpRecordDecisionOutput{}, err
 	}
 	defer closeWriter(w)
+	// Validate before the write. The same check runs inside govwrite, but by the
+	// time it fails there the message is buried under "govwrite: write_decision:
+	// EXECUTION_ERROR: append decision:" and the kernel has flattened the type,
+	// so the caller was told "internal error" for a bad enum they could have
+	// corrected on the next call (#355).
+	if err := d.Validate(); err != nil {
+		return mcpRecordDecisionOutput{}, userInputError(err)
+	}
 	if _, err := w.Decision(ctx, d); err != nil {
 		return mcpRecordDecisionOutput{}, err
 	}
@@ -1853,6 +1878,11 @@ func mcpRunRecordOutcome(ctx context.Context, actor string, input mcpRecordOutco
 	// autoEdge=true: the governed executor appends the outcome and fires
 	// the action_of/outcome_of edges, replacing the inline
 	// autoedge.OnOutcomeAppended call.
+	// See mcpRunRecordDecision: validate here so an invalid enum reaches the
+	// caller as -32602 rather than an opaque internal error.
+	if err := outcome.Validate(); err != nil {
+		return mcpRecordOutcomeOutput{}, userInputError(err)
+	}
 	if _, err := w.Outcome(ctx, outcome, true); err != nil {
 		return mcpRecordOutcomeOutput{}, err
 	}
@@ -1988,7 +2018,7 @@ func mcpRunMemoryResolve(ctx context.Context, actor string, input mcpMemoryResol
 		return mcpMemoryResolveOutput{}, fmt.Errorf("winner_id and loser_id are required")
 	}
 	if input.WinnerID == input.LoserID {
-		return mcpMemoryResolveOutput{}, fmt.Errorf("winner_id and loser_id must differ")
+		return mcpMemoryResolveOutput{}, userInputError(fmt.Errorf("winner_id and loser_id must differ"))
 	}
 	// Both beliefs must live in ONE brain: the resolution writes both status
 	// transitions and this API cannot span two stores atomically (#341). The
