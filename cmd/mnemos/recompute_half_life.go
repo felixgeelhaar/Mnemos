@@ -220,6 +220,11 @@ func liveForHalfLife(s domain.ClaimStatus) bool {
 // halfLifeApplyResult reports what an apply actually did, read back from the
 // store rather than counted from the writes issued.
 type halfLifeApplyResult struct {
+	// Incomplete reports that the pass stopped early because the job budget
+	// ran out. Everything counted below is still durable, and the next run
+	// resumes from it — a property that only exists because a recorded
+	// verdict changes what the next run selects (ADR 0025).
+	Incomplete bool
 	// Written is how many claims were handed to the governed writer.
 	Written int
 	// Verified is how many of those read back from the store carrying the
@@ -242,12 +247,34 @@ func applyHalfLifeBackfill(ctx context.Context, w *govwrite.Writer, changes []do
 		end := min(start+batch, len(changes))
 		chunk := changes[start:end]
 
+		// A cancelled context means the job budget ran out, not that the pass is
+		// broken. Every batch already committed is durable and — since ADR 0025
+		// — is genuinely skipped by the next run, so stopping here is PROGRESS
+		// rather than failure. Reporting it as an error would throw away that
+		// distinction and tell the user 17,000 persisted verdicts were a crash.
+		//
+		// This matters most on the first run after ADR 0025 ships: recording a
+		// verdict for the durable majority means writing ~95% of a brain instead
+		// of ~4%, which on an 88k-belief store is tens of minutes and will
+		// exceed a default budget. It converges over a few runs; before the
+		// classifier column a partial run made no progress toward termination
+		// at all, because nothing it wrote changed what the next run selected.
+		if ctx.Err() != nil {
+			res.Incomplete = true
+			return res, nil
+		}
+
 		if _, err := w.Claims(ctx, chunk, govwrite.ClaimReason{
 			// The reason names the tool so a later reader can tell an automated
 			// backfill from a human edit in claim_status_history.
 			Reason:    "Backfill per-claim freshness half-life from the volatility classifier (recompute-half-life)",
 			ChangedBy: actor,
 		}); err != nil {
+			// Same reasoning for a deadline that lands mid-write.
+			if ctx.Err() != nil {
+				res.Incomplete = true
+				return res, nil
+			}
 			return res, fmt.Errorf("write batch %d (claims %d-%d): %w", res.Batches+1, start+1, end, err)
 		}
 		res.Written += len(chunk)
@@ -255,6 +282,10 @@ func applyHalfLifeBackfill(ctx context.Context, w *govwrite.Writer, changes []do
 
 		verified, err := verifyHalfLifeBatch(ctx, w, chunk)
 		if err != nil {
+			if ctx.Err() != nil {
+				res.Incomplete = true
+				return res, nil
+			}
 			return res, err
 		}
 		res.Verified += verified
@@ -325,6 +356,13 @@ func printHalfLifeResult(plan halfLifePlan, res halfLifeApplyResult) {
 		return
 	}
 	fmt.Printf("  verified: all %d read back with the intended value.\n", res.Verified)
+	if res.Incomplete {
+		remaining := len(plan.Changes) - res.Written
+		fmt.Printf("\nSTOPPED EARLY: the job budget ran out with %d claim(s) still to do.\n"+
+			"Everything above is committed and verified. Re-run to continue — the pass now\n"+
+			"resumes rather than restarting, because a recorded verdict changes what the\n"+
+			"next run selects. Raise MNEMOS_JOB_TIMEOUT to do more per run.\n", remaining)
+	}
 }
 
 // printHalfLifeDistribution prints counts per resulting half-life, sorted so two

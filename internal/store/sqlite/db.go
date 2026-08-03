@@ -577,7 +577,15 @@ CREATE INDEX IF NOT EXISTS idx_global_schemas_promoted_at ON global_schemas(prom
 // the bump is REQUIRED: migrate() returns early when user_version is already at
 // currentSchemaVersion, so without it postMigrateIndexes never runs again and
 // every existing brain would keep full-scanning claims for a test lookup.
-const currentSchemaVersion = 24
+// v25 (ADR 0025) adds claims.half_life_classifier — which classifier assigned the
+// half-life, so "judged durable" stops being indistinguishable from "never examined".
+// Paired with the expectedColumns entry below, and the bump is what ACTIVATES it:
+// migrate() returns early once user_version has reached currentSchemaVersion, so an
+// expectedColumns entry without a bump is inert on exactly the brains that need it —
+// every pre-existing one — and the first read fails with "no such column". Caught by
+// running the new binary against a copy of a real 88k-belief brain; a fresh test DB
+// gets the column from CREATE TABLE and never exercises this path.
+const currentSchemaVersion = 25
 
 // addMissingColumn declares one defensive column-add. Each entry is
 // idempotent: if the column already exists in the table we skip it,
@@ -712,10 +720,25 @@ func migrate(db *sql.DB) error {
 		return fmt.Errorf("read user_version: %w", err)
 	}
 
-	if userVersion >= currentSchemaVersion {
-		return nil
-	}
-
+	// The column probes run UNCONDITIONALLY, ahead of the version gate.
+	//
+	// They used to sit behind `userVersion >= currentSchemaVersion { return nil }`,
+	// which made an expectedColumns entry inert unless its author also remembered
+	// to bump currentSchemaVersion — and inert on precisely the databases that
+	// needed it, since a brain from the previous release already sits AT the
+	// current version. The failure is total rather than partial: the first read
+	// fails with "no such column" and the brain is unopenable.
+	//
+	// Two things made it invisible. A fresh test database gets every column from
+	// CREATE TABLE and never exercises this path, and the pairing is a convention
+	// held in a comment rather than anything the compiler or a test can check.
+	// ADR 0025 shipped with the entry and without the bump; it was caught by
+	// running the binary against a copy of a real 88k-belief brain, not by CI.
+	//
+	// This restores what the function's own strategy note above already claims:
+	// the only state needed is "what columns does this DB have right now". The
+	// cost is one PRAGMA table_info per entry per open — microseconds, and only
+	// on the open path.
 	for _, c := range expectedColumns {
 		has, err := columnExists(db, c.table, c.column)
 		if err != nil {
@@ -728,6 +751,12 @@ func migrate(db *sql.DB) error {
 		if _, err := db.Exec(stmt); err != nil {
 			return fmt.Errorf("add %s.%s: %w", c.table, c.column, err)
 		}
+	}
+
+	// The version gate still guards everything below: the one-shot data
+	// migrations must not re-run, and the index creation is version-keyed.
+	if userVersion >= currentSchemaVersion {
+		return nil
 	}
 
 	// One-shot data migrations that depend on the columns existing.
