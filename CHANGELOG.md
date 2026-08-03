@@ -8,6 +8,89 @@ notable changes.
 
 ## [Unreleased]
 
+## [0.124.0] — 2026-08-03
+
+Completes the half-life work that #331, #334 and #336 started. The value was
+being computed and dropped; then it was stored; now it is possible to know
+whether anyone ever looked.
+
+### Added
+
+- **`claims.half_life_classifier` — which classifier assigned a belief's
+  half-life** (#337, #349, ADR 0025). `half_life_days = 0` was two different
+  facts: *"the volatility classifier read this text and declined to shorten
+  it"* (a verdict) and *"no classifier has ever looked at this belief"* (the
+  absence of one).
+
+  For **scoring** the two are genuinely identical — trust's `<= 0 → use the
+  90-day default` contract is right for both — which is why this survived for
+  the life of the product. Everything downstream of the number is what could
+  not function. On a real 88k-belief brain, `mnemos recompute-half-life` could
+  run to completion, verify every write, and still leave **64,951 of 68,015
+  live beliefs (95.5%)** matching its own selection predicate. Every subsequent
+  run redid all of them. The pass could not report itself finished because
+  *finished had no representation*.
+
+  Read with `half_life_days`, the new column gives four states instead of two:
+
+  | `half_life_classifier` | `half_life_days` | meaning |
+  |---|---|---|
+  | `''` | `0` | **unknown** — nobody has looked |
+  | `''` | `> 0` | human override via `MarkVerified` |
+  | `volatility/v1` | `0` | **classified durable** — decays at the default *by decision* |
+  | `volatility/v1` | `14` | classified volatile |
+
+  Storing the *version* rather than a bare flag is what makes a classifier
+  improvement targetable: `volatility.go` deliberately under-catches and says
+  so, and until now "which rows did v1 look at, so v2 can revisit them?" had no
+  answer.
+
+  **The migration writes no rows.** Every existing belief genuinely has not
+  been classified, so `DEFAULT ''` states the truth about all 88,814 of them
+  without a single `UPDATE` — 64,951 beliefs therefore cannot be silently
+  reclassified as "durable" on ship, because shipping writes nothing. 23 ms
+  measured; metadata-only on Postgres 11+, `ALGORITHM=INSTANT` on MySQL 8.
+
+  **Nothing about recall changed on the day it shipped.** `internal/trust` is
+  untouched and no scoring, ranking, admission, staleness or consolidation path
+  reads the column. That was a constraint on the design, not a coincidence: a
+  belief-model change that alters recall on day one cannot be rolled back by
+  reverting a binary.
+
+  `recompute-half-life` now reports coverage, and converges. Expect the first
+  run on an existing brain to be long — recording a verdict for the durable
+  majority means writing ~95% of the brain rather than ~4%.
+
+### Fixed
+
+- **A new column would not have reached any existing brain** (#350). The
+  `expectedColumns` entry above shipped in #349 without a
+  `currentSchemaVersion` bump, and `migrate()` returned early on
+  `userVersion >= currentSchemaVersion` — true for every brain written by the
+  previous release. The entry was inert on precisely the databases that needed
+  it, and the failure was total rather than partial: the first read fails with
+  `no such column` and the brain cannot be opened at all.
+
+  Caught before release by running the binary against a copy of a real
+  88k-belief brain. The full test suite passed throughout, because a fresh test
+  database gets every column from `CREATE TABLE` and never reaches the `ALTER`
+  path — and because the entry/bump pairing was a convention recorded in a
+  comment, not something the compiler or a test could check.
+
+  Fixed at the class rather than the instance: the column probes now run
+  unconditionally, ahead of the version gate, which is what `migrate()`'s own
+  strategy note already claimed ("the only state we need is what columns does
+  this DB have right now"). The gate still guards the one-shot data migrations
+  and version-keyed indexes, which must not re-run.
+
+- **A backfill that ran out of budget reported its progress as a failure**
+  (#350). Measured on a real brain: 20 minutes wrote and verified 17,000
+  verdicts, then printed only `error: backfill half_life_days`. It now stops
+  cleanly, reports what landed, and says to re-run. Resumption verified —
+  coverage 4.5% → 38.1%, remaining 65,451 → 42,451, with completed rows
+  skipped. That resumability is what ADR 0025 buys: before it, a partial run
+  changed nothing about what the next run selected.
+
 ## [0.123.0] — 2026-08-02
 
 A release about the difference between a system that looks correct and one that
