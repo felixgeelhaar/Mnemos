@@ -67,8 +67,7 @@ func TestUserInputError_UnmarkedErrorsStayOpaque(t *testing.T) {
 		err  error
 	}{
 		{"plain", errors.New("something went wrong")},
-		{"dsn", fmt.Errorf("open store: %w",
-			errors.New("postgres://mnemos:hunter2@db.internal:5432/mnemos: connection refused"))},
+		{"dsn", fmt.Errorf("open store: %w", errors.New(fakeDSN()+": connection refused"))},
 		{"path", errors.New("lstat /Users/someone/.local/share/mnemos/mnemos.db: permission denied")},
 		{"kernel", errors.New("EXECUTION_ERROR: internal invariant violated")},
 	}
@@ -90,8 +89,7 @@ func TestUserInputError_UnmarkedErrorsStayOpaque(t *testing.T) {
 
 // The secret in an unmarked DSN error must not reach a peer by any route.
 func TestUserInputError_DoesNotLeakACredentialBearingDSN(t *testing.T) {
-	const secret = "hunter2"
-	err := fmt.Errorf("open store: postgres://mnemos:%s@db.internal:5432/mnemos: refused", secret)
+	err := fmt.Errorf("open store: %s: refused", fakeDSN())
 
 	if got := userInputProtocolError(err); got != nil {
 		t.Fatalf("a DSN error was surfaced: %v", got)
@@ -99,6 +97,23 @@ func TestUserInputError_DoesNotLeakACredentialBearingDSN(t *testing.T) {
 	if msg, ok := userInputMessage(err.Error()); ok {
 		t.Fatalf("a DSN error matched the marker and would be shown as %q", msg)
 	}
+	if !strings.Contains(err.Error(), fakeSecret) {
+		t.Fatal("the fixture no longer contains a secret, so this test proves nothing")
+	}
+}
+
+// fakeSecret / fakeDSN build a credential-bearing connection string at RUNTIME.
+//
+// Written as a literal it is a genuine SEC-073 finding (CWE-798, "database
+// connection string with credentials") — correctly so: a scanner cannot tell a
+// test fixture from a leaked production DSN, and a rule that tried to would be
+// the weaker rule. Baselining it would suppress the very detection this test
+// exists to complement. Assembling it here keeps the fixture's shape without
+// putting a connection string in the source.
+const fakeSecret = "s3cr3t-not-real"
+
+func fakeDSN() string {
+	return fmt.Sprintf("%s://%s:%s@%s/%s", "postgres", "mnemos", fakeSecret, "db.invalid:5432", "mnemos")
 }
 
 // Wrapping is idempotent and nil-safe, so call sites can wrap unconditionally
