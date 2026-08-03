@@ -9,6 +9,7 @@ import (
 	"go.klarlabs.de/axi"
 	"go.klarlabs.de/axi/domain"
 	"go.klarlabs.de/bolt"
+	"go.klarlabs.de/mcp/protocol"
 	"go.klarlabs.de/mnemos/internal/kernel"
 )
 
@@ -320,6 +321,14 @@ func dispatchAxiTool[Out any](ctx context.Context, k *kernel.Governed, _ *sql.DB
 		return zero, err
 	}
 	if res.Failure != nil {
+		// A failure the executor marked as caused by the caller's input becomes
+		// -32602 with its message intact. Everything else keeps the previous
+		// behaviour and is flattened by publicError into -32603, so the failure
+		// direction of anything unmarked is "stays opaque" rather than "leaks"
+		// (#355).
+		if msg, ok := userInputMessage(res.Failure.Message); ok {
+			return zero, protocol.NewInvalidParams(msg)
+		}
 		return zero, fmt.Errorf("%s: %s", res.Failure.Code, res.Failure.Message)
 	}
 	if res.Result == nil {

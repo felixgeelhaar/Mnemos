@@ -78,7 +78,7 @@ func mcpRunRememberEvent(ctx context.Context, actor string, input mcpRememberEve
 	}
 	at, err := time.Parse(time.RFC3339, strings.TrimSpace(input.At))
 	if err != nil {
-		return mcpRememberEventOutput{}, fmt.Errorf("invalid at timestamp: %w", err)
+		return mcpRememberEventOutput{}, userInputError(fmt.Errorf("invalid at timestamp: %w", err))
 	}
 
 	mem, err := newLibraryMemory(ctx, actor)
@@ -170,7 +170,7 @@ func mcpRunRecallAtTime(ctx context.Context, input mcpRecallAtTimeInput) (mcpQue
 	}
 	asOf, err := time.Parse(time.RFC3339, strings.TrimSpace(input.AsOf))
 	if err != nil {
-		return mcpQueryOutput{}, fmt.Errorf("invalid asOf timestamp: %w", err)
+		return mcpQueryOutput{}, userInputError(fmt.Errorf("invalid asOf timestamp: %w", err))
 	}
 
 	conn, err := openConn(ctx)
