@@ -203,6 +203,29 @@ func floatsClose(a, b float64) bool {
 //
 // Runs after the polarity / value-divergence paths so it only kicks in
 // when those didn't already classify the pair.
+// Numeric-divergence anchors, tuned against a real 68,670-belief brain.
+//
+// The previous bars (0.5 of the shorter claim, 0.3 of the longer, no absolute
+// floor) were satisfied by generic vocabulary: "245 tests green, including the
+// existing state-file guards" vs "Full suite green (1950 tests)" share only
+// {tests, green} and scored exactly 0.50 / 0.33 — clearing both. Two different
+// projects' test counts were recorded as contradicting each other. That path
+// produced 47.5% of all live contradiction edges.
+//
+// All three are needed; none suffices alone:
+//
+//   - minNumericAnchorRatio / minNumericCoverage reject pairs whose shared
+//     vocabulary is a small share of either claim (the case above).
+//   - minNumericSubjectTokens rejects the trivially-scoring short claim:
+//     "25 tests green" has two word tokens, so ANY shared pair scores 1.0
+//     against it. Three is the largest floor that still admits the canonical
+//     true positive, "the user has 12 prior refunds" ({user, prior, refunds}).
+const (
+	minNumericAnchorRatio   = 0.70
+	minNumericCoverage      = 0.40
+	minNumericSubjectTokens = 3
+)
+
 func detectNumericDivergence(aText, bText string, aTokens, bTokens map[string]struct{}) bool {
 	aNums := extractNumerics(aText)
 	bNums := extractNumerics(bText)
@@ -245,21 +268,21 @@ func numericDivergesPre(aNums []numericValue, aWords map[string]struct{}, bNums 
 		return false
 	}
 	shorter := min(len(aWords), len(bWords))
-	if shorter == 0 {
+	if shorter < minNumericSubjectTokens {
 		return false
 	}
 	// Same short-claim blind spot the polarity path had: a two-token claim
 	// trivially scores 1.0 against the shorter length. Require the overlap to
 	// also be a real share of the LONGER claim.
 	longer := max(len(aWords), len(bWords))
-	if longer == 0 || float64(overlap)/float64(longer) < minContradictionCoverage {
+	if longer == 0 || float64(overlap)/float64(longer) < minNumericCoverage {
 		return false
 	}
 	ratio := float64(overlap) / float64(shorter)
 	// Stricter than the supports-overlap threshold: numeric
 	// disagreement is a strong claim, so pairs must share most of
 	// their topical surface (excluding the numbers themselves).
-	if ratio < 0.5 {
+	if ratio < minNumericAnchorRatio {
 		return false
 	}
 

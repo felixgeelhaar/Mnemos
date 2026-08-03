@@ -171,3 +171,55 @@ func TestExtractNumerics_LocatorsAreNotQuantities(t *testing.T) {
 		t.Errorf("timeout:30s must stay a measurement, got %v", got)
 	}
 }
+
+// Real false positives from a production brain, all of which cleared the
+// pre-tuning anchors (0.50 of the shorter claim, 0.30 of the longer, no
+// absolute floor). Together they were 47.5% of every live contradiction edge.
+func TestDetectNumericDivergence_RejectsSharedGenericVocabulary(t *testing.T) {
+	cases := []struct{ name, a, b string }{
+		{
+			"different test suites in different projects",
+			"245 tests green, including the existing state-file guards",
+			"Full suite green (1950 tests)",
+		},
+		{
+			"shared word is incidental",
+			"1838 migrated, 0 failures",
+			"lockout after repeated failures → 429",
+		},
+		{
+			// Two word tokens, so ANY shared pair scores 1.0 against the
+			// shorter claim. The ratio bars alone cannot reject this; the
+			// absolute token floor is what does.
+			"claim too short to identify a subject",
+			"25 tests green",
+			"phpunit at 13.2.4 (latest), 878 tests green",
+		},
+		{
+			"different measurements of different things",
+			"Dry run matches the database exactly: 1018 events + 816 claims + 4 decisions = 1838, zero drift",
+			"Exactly as predicted — 206 events, 412 claims cascaded",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			aTok, _ := contentTokensAndPolarity(tc.a)
+			bTok, _ := contentTokensAndPolarity(tc.b)
+			if detectNumericDivergence(tc.a, tc.b, aTok, bTok) {
+				t.Errorf("flagged as a numeric contradiction:\n  %q\n  %q", tc.a, tc.b)
+			}
+		})
+	}
+}
+
+// The canonical true positive must survive the tightened anchors. Its shared
+// subject is exactly three word tokens ({user, prior, refunds}), which is what
+// pins minNumericSubjectTokens at 3 rather than 4.
+func TestDetectNumericDivergence_KeepsTheCanonicalTruePositive(t *testing.T) {
+	a, b := "the user has 12 prior refunds", "the user has 0 prior refunds"
+	aTok, _ := contentTokensAndPolarity(a)
+	bTok, _ := contentTokensAndPolarity(b)
+	if !detectNumericDivergence(a, b, aTok, bTok) {
+		t.Error("the canonical numeric contradiction was lost to the tightened anchors")
+	}
+}
