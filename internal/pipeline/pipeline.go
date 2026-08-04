@@ -245,6 +245,11 @@ func PersistArtifacts(ctx context.Context, conn *store.Conn, events []domain.Eve
 		enriched[i].HalfLifeClassifier = extract.VolatilityClassifierVersion
 	}
 
+	// Where each belief came from, carried through from the source events. The
+	// events have always recorded it; nothing ever copied it onto the belief,
+	// so SourceDocument and SourceType were empty on every row of a real brain.
+	StampSourceProvenance(events, enriched, links)
+
 	groups := groupClaimsByCreatedBy(enriched)
 	for actor, group := range groups {
 		if err := conn.Claims.UpsertWithReasonAs(ctx, group, "pipeline", actor); err != nil {
