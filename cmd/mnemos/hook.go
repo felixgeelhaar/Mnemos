@@ -720,6 +720,10 @@ func captureTextCtx(ctx context.Context, ev hookEvent, text string) bool {
 			UseLLM:        useLLM,
 			UseEmbeddings: useLLM,
 			SessionID:     ev.SessionID,
+			// The workspace that owns this session's cwd, so a belief captured
+			// in one project never contradicts one captured in another. Empty
+			// outside a registered workspace, which suppresses nothing.
+			Workspace: captureWorkspace(ev.Cwd),
 		})
 		ok = err == nil
 	}
@@ -910,4 +914,23 @@ func extractBlocks(raw json.RawMessage) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// captureWorkspace names the project a captured session belongs to, or "" when
+// the session is not inside a registered workspace.
+//
+// The registry name is used rather than the path: it is stable across clones
+// and checkouts, and it is what `mnemos workspace list` shows, so a stored
+// value means something to a human reading it back. A path would tie every
+// belief to one machine's directory layout.
+//
+// Returning "" is the safe answer and the common one — a session outside any
+// registered workspace suppresses nothing, which is the same fail-open rule the
+// session filter uses.
+func captureWorkspace(cwd string) string {
+	if strings.TrimSpace(cwd) == "" {
+		return ""
+	}
+	_, name, _ := resolveWorkspaceBrain(cwd)
+	return name
 }
