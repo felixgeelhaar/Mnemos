@@ -61,7 +61,7 @@ func DropIntraSessionContradictions(
 		}
 	}
 
-	sessionOf, err := sessionsForClaims(ctx, events, claims, needed)
+	sessionOf, err := scopeForClaims(ctx, events, claims, needed, SessionMetadataKey)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -86,15 +86,21 @@ func DropIntraSessionContradictions(
 	return kept, dropped, nil
 }
 
-// sessionsForClaims resolves each claim to the session of its source events,
-// via the evidence links. A claim with several events takes the first
-// non-empty session: evidence for one claim comes from one ingestion, so they
-// agree in practice, and disagreement should not silently suppress an edge.
-func sessionsForClaims(
+// scopeForClaims resolves each claim to one metadata value carried by its
+// source events, via the evidence links. A claim with several events takes the
+// first non-empty value: evidence for one claim comes from one ingestion, so
+// they agree in practice, and disagreement should not silently suppress an edge.
+//
+// Parameterised by key so the session and workspace filters share one
+// definition of "which scope does this claim belong to". Two copies would drift,
+// and a drop rule that resolves provenance differently from its sibling is a
+// rule nobody can reason about.
+func scopeForClaims(
 	ctx context.Context,
 	events ports.EventRepository,
 	claims ports.ClaimRepository,
 	claimIDs map[string]struct{},
+	metadataKey string,
 ) (map[string]string, error) {
 	if len(claimIDs) == 0 {
 		return map[string]string{}, nil
@@ -105,7 +111,7 @@ func sessionsForClaims(
 	}
 	links, err := claims.ListEvidenceByClaimIDs(ctx, ids)
 	if err != nil {
-		return nil, fmt.Errorf("mnemos: session scope: list evidence: %w", err)
+		return nil, fmt.Errorf("mnemos: %s scope: list evidence: %w", metadataKey, err)
 	}
 	if len(links) == 0 {
 		return map[string]string{}, nil
@@ -122,9 +128,9 @@ func sessionsForClaims(
 	}
 	evs, err := events.ListByIDs(ctx, eventIDs)
 	if err != nil {
-		return nil, fmt.Errorf("mnemos: session scope: list events: %w", err)
+		return nil, fmt.Errorf("mnemos: %s scope: list events: %w", metadataKey, err)
 	}
-	return SessionOfClaims(links, evs), nil
+	return scopeOfClaims(links, evs, metadataKey), nil
 }
 
 // SessionOfClaims maps each claim to the session of its source events, given
@@ -134,9 +140,14 @@ func sessionsForClaims(
 // path agree on what "same session" means — a prune that used a different rule
 // would either retain edges ingest would never create or drop ones it would.
 func SessionOfClaims(links []domain.ClaimEvidence, events []domain.Event) map[string]string {
+	return scopeOfClaims(links, events, SessionMetadataKey)
+}
+
+// scopeOfClaims is SessionOfClaims generalised to any event metadata key.
+func scopeOfClaims(links []domain.ClaimEvidence, events []domain.Event, metadataKey string) map[string]string {
 	sessionOfEvent := make(map[string]string, len(events))
 	for _, e := range events {
-		if s := e.Metadata[SessionMetadataKey]; s != "" {
+		if s := e.Metadata[metadataKey]; s != "" {
 			sessionOfEvent[e.ID] = s
 		}
 	}

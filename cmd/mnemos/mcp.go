@@ -87,6 +87,11 @@ type mcpProcessTextInput struct {
 	// itself from two sessions genuinely disagreeing. Optional; empty means
 	// the ingestion is not session-scoped and nothing is suppressed.
 	SessionID string `json:"sessionId,omitempty" jsonschema:"description=Agent session id; suppresses contradictions between claims from the same session"`
+	// Workspace tags the resulting events with the project the session ran in,
+	// so contradiction detection can tell two projects reporting their own
+	// numbers from a genuine disagreement. Optional; empty means the ingestion
+	// is not workspace-scoped and nothing is suppressed.
+	Workspace string `json:"workspace,omitempty" jsonschema:"description=Workspace/project name; suppresses contradictions between claims from different projects"`
 }
 
 type mcpProcessTextOutput struct {
@@ -1419,6 +1424,12 @@ func mcpRunProcessText(ctx context.Context, actor string, input mcpProcessTextIn
 				}
 				events[i].Metadata[pipeline.SessionMetadataKey] = input.SessionID
 			}
+			if input.Workspace != "" {
+				if events[i].Metadata == nil {
+					events[i].Metadata = map[string]string{}
+				}
+				events[i].Metadata[pipeline.WorkspaceMetadataKey] = input.Workspace
+			}
 		}
 
 		ext, err := pipeline.NewExtractor(input.UseLLM)
@@ -1462,6 +1473,18 @@ func mcpRunProcessText(ctx context.Context, actor string, input mcpProcessTextIn
 			}
 			filtered, _, ferr := pipeline.DropIntraSessionContradictions(
 				ctx, conn.Events, conn.Claims, rels, input.SessionID, newIDs)
+			if ferr != nil {
+				return ferr
+			}
+			rels = filtered
+		}
+		if input.Workspace != "" {
+			newIDs := make(map[string]struct{}, len(claims))
+			for i := range claims {
+				newIDs[claims[i].ID] = struct{}{}
+			}
+			filtered, _, ferr := pipeline.DropCrossWorkspaceContradictions(
+				ctx, conn.Events, conn.Claims, rels, input.Workspace, newIDs)
 			if ferr != nil {
 				return ferr
 			}
