@@ -8,6 +8,58 @@ notable changes.
 
 ## [Unreleased]
 
+## [0.127.0] — 2026-08-04
+
+Provenance. Two fields the brain always had and never filled, and the
+contradiction residue that had no way to know which project it came from.
+
+### Added
+
+- **Beliefs from different projects no longer contradict each other** (#359,
+  #364). #360 and #361 took numeric contradiction edges from 1,539 to 10; the
+  ten that remained were all one shape — two projects reporting their own
+  numbers:
+
+  ```
+  "Icons drawn and pushed. 423 tests green"  vs  "1290 tests, green, pushed"
+  ```
+
+  No overlap or numeric rule reaches those. The claims genuinely share topic
+  vocabulary and really are about the same KIND of thing, so every threshold
+  that rejects them starts rejecting true positives instead. Only provenance
+  separates them, and capture always knew — it holds the session's cwd — it
+  simply never recorded it.
+
+  Events now carry a `workspace` tag and cross-project `contradicts` edges are
+  dropped. It is the deliberate inverse of the existing session filter, which
+  drops when both sides are the SAME session: a conversation moving through a
+  problem, versus two projects that were never in conversation. `supports` edges
+  survive in both directions — two projects agreeing about a shared library is
+  real evidence.
+
+  **An unknown workspace on either side never drops anything.** Every belief
+  ingested before this has no workspace, so treating unknown as "different"
+  would have silently deleted genuine disagreement across the whole back
+  catalogue on day one. That fail-safe is the load-bearing part, and removing it
+  fails a test.
+
+- **Source provenance reaches the belief** (#365). `SourceDocument` and
+  `SourceType` were empty on all 68,670 beliefs of a real brain — not because
+  the information was missing, but because nothing copied it off the event.
+  `input_source_path` has always held the absolute file path; it reached the
+  store boundary and stopped, the same shape as #331's half-life. Everything
+  built on those fields — `trust.SourceAuthority`, the liveness signals, any
+  answer to "where did this come from?" — sat inert as a result.
+
+  An existing value is never overwritten, and an unclassifiable source writes
+  nothing: `raw_text` alone could be a transcript, a paste or an API call, and a
+  confident wrong value is worse than an honest empty.
+
+  `Scope` is deliberately left empty. It is an operational filter with
+  fail-closed match semantics, so filling it with a project name would change
+  which beliefs answer a scoped query — a decision about what Scope MEANS, not a
+  missing wire.
+
 ## [0.126.0] — 2026-08-04
 
 Contradiction precision. Found by auditing what the brain actually believes it
