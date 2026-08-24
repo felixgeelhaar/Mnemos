@@ -2,6 +2,8 @@ module go.klarlabs.de/mnemos
 
 go 1.26.2
 
+toolchain go1.26.7
+
 require (
 	github.com/felixgeelhaar/chronos v0.6.0
 	github.com/go-sql-driver/mysql v1.10.0
