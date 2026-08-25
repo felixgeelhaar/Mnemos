@@ -42,11 +42,11 @@ func (e markVerifiedExecutor) Execute(ctx context.Context, input any, _ axidomai
 		return axidomain.ExecutionResult{}, nil, fmt.Errorf("mark verified: %w", err)
 	}
 	return axidomain.ExecutionResult{
-			Data:    in.ClaimID,
-			Summary: fmt.Sprintf("verified claim %s", in.ClaimID),
-		}, ev("mnemos.write.mark_verified", map[string]any{
-			"claim_id": in.ClaimID, "half_life_days": in.HalfLifeDays,
-		}), nil
+		Data:    in.ClaimID,
+		Summary: fmt.Sprintf("verified claim %s", in.ClaimID),
+	}, ev("mnemos.write.mark_verified", map[string]any{
+		"claim_id": in.ClaimID, "half_life_days": in.HalfLifeDays,
+	}), nil
 }
 
 // MarkVerified bumps a claim's last_verified and increments verify_count.
@@ -78,11 +78,11 @@ func (e setValidityExecutor) Execute(ctx context.Context, input any, _ axidomain
 		return axidomain.ExecutionResult{}, nil, fmt.Errorf("set validity: %w", err)
 	}
 	return axidomain.ExecutionResult{
-			Data:    in.ClaimID,
-			Summary: fmt.Sprintf("set valid_to on claim %s", in.ClaimID),
-		}, ev("mnemos.write.set_validity", map[string]any{
-			"claim_id": in.ClaimID, "valid_to": in.ValidTo.Format(time.RFC3339),
-		}), nil
+		Data:    in.ClaimID,
+		Summary: fmt.Sprintf("set valid_to on claim %s", in.ClaimID),
+	}, ev("mnemos.write.set_validity", map[string]any{
+		"claim_id": in.ClaimID, "valid_to": in.ValidTo.Format(time.RFC3339),
+	}), nil
 }
 
 // SetValidity closes a claim's validity interval at validTo (or clears
@@ -113,11 +113,11 @@ func (e mergeEntitiesExecutor) Execute(ctx context.Context, input any, _ axidoma
 		return axidomain.ExecutionResult{}, nil, fmt.Errorf("merge entities: %w", err)
 	}
 	return axidomain.ExecutionResult{
-			Data:    in.WinnerID,
-			Summary: fmt.Sprintf("merged %s into %s", in.LoserID, in.WinnerID),
-		}, ev("mnemos.write.merge_entities", map[string]any{
-			"winner_id": in.WinnerID, "loser_id": in.LoserID,
-		}), nil
+		Data:    in.WinnerID,
+		Summary: fmt.Sprintf("merged %s into %s", in.LoserID, in.WinnerID),
+	}, ev("mnemos.write.merge_entities", map[string]any{
+		"winner_id": in.WinnerID, "loser_id": in.LoserID,
+	}), nil
 }
 
 // MergeEntities folds the loser entity into the winner and deletes the
@@ -275,21 +275,21 @@ func (e deleteClaimCascadeExecutor) Execute(ctx context.Context, input any, _ ax
 		// Residue, not a failed action: report it so the evidence chain
 		// records the tombstone the operator has to resolve.
 		return axidomain.ExecutionResult{
-				Data:    deleteClaimCascadeResult{ClaimID: in.ClaimID, Removed: false, Cause: partial.Err.Error()},
-				Summary: fmt.Sprintf("tombstoned claim %s (row NOT removed: %v)", in.ClaimID, partial.Err),
-			}, ev("mnemos.write.delete_claim_cascade", map[string]any{
-				"claim_id": in.ClaimID, "removed": false, "partial": true,
-				"cause": partial.Err.Error(),
-			}), nil
+			Data:    deleteClaimCascadeResult{ClaimID: in.ClaimID, Removed: false, Cause: partial.Err.Error()},
+			Summary: fmt.Sprintf("tombstoned claim %s (row NOT removed: %v)", in.ClaimID, partial.Err),
+		}, ev("mnemos.write.delete_claim_cascade", map[string]any{
+			"claim_id": in.ClaimID, "removed": false, "partial": true,
+			"cause": partial.Err.Error(),
+		}), nil
 	case err != nil:
 		return axidomain.ExecutionResult{}, nil, err
 	}
 	return axidomain.ExecutionResult{
-			Data:    deleteClaimCascadeResult{ClaimID: in.ClaimID, Removed: removed},
-			Summary: fmt.Sprintf("deleted claim %s (relationships + embedding + cascade)", in.ClaimID),
-		}, ev("mnemos.write.delete_claim_cascade", map[string]any{
-			"claim_id": in.ClaimID, "removed": true, "partial": false,
-		}), nil
+		Data:    deleteClaimCascadeResult{ClaimID: in.ClaimID, Removed: removed},
+		Summary: fmt.Sprintf("deleted claim %s (relationships + embedding + cascade)", in.ClaimID),
+	}, ev("mnemos.write.delete_claim_cascade", map[string]any{
+		"claim_id": in.ClaimID, "removed": true, "partial": false,
+	}), nil
 }
 
 // DeleteClaimCascade deletes a claim and every row it owns
@@ -355,11 +355,11 @@ func (e deleteEventCascadeExecutor) Execute(ctx context.Context, input any, _ ax
 		return axidomain.ExecutionResult{}, nil, fmt.Errorf("delete event %s: %w", in.EventID, err)
 	}
 	return axidomain.ExecutionResult{
-			Data:    cascaded,
-			Summary: fmt.Sprintf("deleted event %s; cascaded %d claim(s)", in.EventID, cascaded),
-		}, ev("mnemos.write.delete_event_cascade", map[string]any{
-			"event_id": in.EventID, "cascaded_claims": cascaded,
-		}), nil
+		Data:    cascaded,
+		Summary: fmt.Sprintf("deleted event %s; cascaded %d claim(s)", in.EventID, cascaded),
+	}, ev("mnemos.write.delete_event_cascade", map[string]any{
+		"event_id": in.EventID, "cascaded_claims": cascaded,
+	}), nil
 }
 
 // DeleteEventCascade deletes an event, its dependent claims (each fully
@@ -385,11 +385,11 @@ func (e deleteEventExecutor) Execute(ctx context.Context, input any, _ axidomain
 		return axidomain.ExecutionResult{}, nil, fmt.Errorf("delete event %s: %w", in.EventID, err)
 	}
 	return axidomain.ExecutionResult{
-			Data:    in.EventID,
-			Summary: fmt.Sprintf("deleted event %s", in.EventID),
-		}, ev("mnemos.write.delete_event", map[string]any{
-			"event_id": in.EventID,
-		}), nil
+		Data:    in.EventID,
+		Summary: fmt.Sprintf("deleted event %s", in.EventID),
+	}, ev("mnemos.write.delete_event", map[string]any{
+		"event_id": in.EventID,
+	}), nil
 }
 
 // DeleteEvent removes a single event row by id. Used by the HTTP
@@ -469,13 +469,13 @@ func (e resetExecutor) Execute(ctx context.Context, input any, _ axidomain.Capab
 		}
 	}
 	return axidomain.ExecutionResult{
-			Data:    counts,
-			Summary: fmt.Sprintf("reset: purged %d claim(s), %d relationship(s), %d embedding(s)", counts.Claims, counts.Relationships, counts.Embeddings),
-		}, ev("mnemos.write.reset", map[string]any{
-			"claims": counts.Claims, "relationships": counts.Relationships,
-			"embeddings": counts.Embeddings, "events": counts.Events,
-			"keep_events": in.KeepEvents,
-		}), nil
+		Data:    counts,
+		Summary: fmt.Sprintf("reset: purged %d claim(s), %d relationship(s), %d embedding(s)", counts.Claims, counts.Relationships, counts.Embeddings),
+	}, ev("mnemos.write.reset", map[string]any{
+		"claims": counts.Claims, "relationships": counts.Relationships,
+		"embeddings": counts.Embeddings, "events": counts.Events,
+		"keep_events": in.KeepEvents,
+	}), nil
 }
 
 // Reset purges all derived memory state (claims, relationships,

@@ -105,12 +105,12 @@ func (e claimsExecutor) Execute(ctx context.Context, input any, _ axidomain.Capa
 		ids = append(ids, c.ID)
 	}
 	return axidomain.ExecutionResult{
-			Data:    writeCount{Accepted: len(in.Claims)},
-			Summary: fmt.Sprintf("upserted %d claim(s)", len(in.Claims)),
-		}, ev("mnemos.write.claims", map[string]any{
-			"count": len(in.Claims), "claim_ids": ids,
-			"reason": in.Reason.Reason, "changed_by": in.Reason.ChangedBy,
-		}), nil
+		Data:    writeCount{Accepted: len(in.Claims)},
+		Summary: fmt.Sprintf("upserted %d claim(s)", len(in.Claims)),
+	}, ev("mnemos.write.claims", map[string]any{
+		"count": len(in.Claims), "claim_ids": ids,
+		"reason": in.Reason.Reason, "changed_by": in.Reason.ChangedBy,
+	}), nil
 }
 
 // Claims upserts pre-built claims. Pass a non-zero ClaimReason to record
@@ -199,12 +199,12 @@ func (e embeddingExecutor) Execute(ctx context.Context, input any, _ axidomain.C
 		return axidomain.ExecutionResult{}, nil, fmt.Errorf("upsert embedding: %w", err)
 	}
 	return axidomain.ExecutionResult{
-			Data:    writeCount{Accepted: 1},
-			Summary: fmt.Sprintf("upserted embedding for %s/%s", in.EntityType, in.EntityID),
-		}, ev("mnemos.write.embedding", map[string]any{
-			"entity_id": in.EntityID, "entity_type": in.EntityType,
-			"model": in.Model, "dimensions": len(in.Vector),
-		}), nil
+		Data:    writeCount{Accepted: 1},
+		Summary: fmt.Sprintf("upserted embedding for %s/%s", in.EntityType, in.EntityID),
+	}, ev("mnemos.write.embedding", map[string]any{
+		"entity_id": in.EntityID, "entity_type": in.EntityType,
+		"model": in.Model, "dimensions": len(in.Vector),
+	}), nil
 }
 
 // Embedding upserts a single vector embedding for an entity (derived
@@ -233,11 +233,11 @@ func (e actionExecutor) Execute(ctx context.Context, input any, _ axidomain.Capa
 		return axidomain.ExecutionResult{}, nil, fmt.Errorf("append action: %w", err)
 	}
 	return axidomain.ExecutionResult{
-			Data:    in.Action.ID,
-			Summary: fmt.Sprintf("appended action %s", in.Action.ID),
-		}, ev("mnemos.write.action", map[string]any{
-			"action_id": in.Action.ID, "kind": string(in.Action.Kind), "subject": in.Action.Subject,
-		}), nil
+		Data:    in.Action.ID,
+		Summary: fmt.Sprintf("appended action %s", in.Action.ID),
+	}, ev("mnemos.write.action", map[string]any{
+		"action_id": in.Action.ID, "kind": string(in.Action.Kind), "subject": in.Action.Subject,
+	}), nil
 }
 
 // Action appends an operational action record. Returns the action id.
@@ -273,12 +273,12 @@ func (e outcomeExecutor) Execute(ctx context.Context, input any, _ axidomain.Cap
 		}
 	}
 	return axidomain.ExecutionResult{
-			Data:    in.Outcome.ID,
-			Summary: fmt.Sprintf("appended outcome %s", in.Outcome.ID),
-		}, ev("mnemos.write.outcome", map[string]any{
-			"outcome_id": in.Outcome.ID, "action_id": in.Outcome.ActionID,
-			"result": string(in.Outcome.Result), "auto_edges": edges,
-		}), nil
+		Data:    in.Outcome.ID,
+		Summary: fmt.Sprintf("appended outcome %s", in.Outcome.ID),
+	}, ev("mnemos.write.outcome", map[string]any{
+		"outcome_id": in.Outcome.ID, "action_id": in.Outcome.ActionID,
+		"result": string(in.Outcome.Result), "auto_edges": edges,
+	}), nil
 }
 
 // Outcome appends an observed outcome. When autoEdge is true the
@@ -304,11 +304,11 @@ func (e lessonExecutor) Execute(ctx context.Context, input any, _ axidomain.Capa
 		return axidomain.ExecutionResult{}, nil, fmt.Errorf("append lesson: %w", err)
 	}
 	return axidomain.ExecutionResult{
-			Data:    in.Lesson.ID,
-			Summary: fmt.Sprintf("upserted lesson %s", in.Lesson.ID),
-		}, ev("mnemos.write.lesson", map[string]any{
-			"lesson_id": in.Lesson.ID, "source": in.Lesson.Source,
-		}), nil
+		Data:    in.Lesson.ID,
+		Summary: fmt.Sprintf("upserted lesson %s", in.Lesson.ID),
+	}, ev("mnemos.write.lesson", map[string]any{
+		"lesson_id": in.Lesson.ID, "source": in.Lesson.Source,
+	}), nil
 }
 
 // Lesson upserts a lesson. Returns the lesson id.
@@ -332,11 +332,11 @@ func (e decisionExecutor) Execute(ctx context.Context, input any, _ axidomain.Ca
 		return axidomain.ExecutionResult{}, nil, fmt.Errorf("append decision: %w", err)
 	}
 	return axidomain.ExecutionResult{
-			Data:    in.Decision.ID,
-			Summary: fmt.Sprintf("upserted decision %s", in.Decision.ID),
-		}, ev("mnemos.write.decision", map[string]any{
-			"decision_id": in.Decision.ID, "risk_level": string(in.Decision.RiskLevel),
-		}), nil
+		Data:    in.Decision.ID,
+		Summary: fmt.Sprintf("upserted decision %s", in.Decision.ID),
+	}, ev("mnemos.write.decision", map[string]any{
+		"decision_id": in.Decision.ID, "risk_level": string(in.Decision.RiskLevel),
+	}), nil
 }
 
 // Decision upserts a decision record. Returns the decision id.
@@ -360,11 +360,11 @@ func (e playbookExecutor) Execute(ctx context.Context, input any, _ axidomain.Ca
 		return axidomain.ExecutionResult{}, nil, fmt.Errorf("append playbook: %w", err)
 	}
 	return axidomain.ExecutionResult{
-			Data:    in.Playbook.ID,
-			Summary: fmt.Sprintf("upserted playbook %s", in.Playbook.ID),
-		}, ev("mnemos.write.playbook", map[string]any{
-			"playbook_id": in.Playbook.ID, "source": in.Playbook.Source,
-		}), nil
+		Data:    in.Playbook.ID,
+		Summary: fmt.Sprintf("upserted playbook %s", in.Playbook.ID),
+	}, ev("mnemos.write.playbook", map[string]any{
+		"playbook_id": in.Playbook.ID, "source": in.Playbook.Source,
+	}), nil
 }
 
 // Playbook upserts a playbook. Returns the playbook id.
@@ -416,12 +416,12 @@ func (e incidentExecutor) Execute(ctx context.Context, input any, _ axidomain.Ca
 		return axidomain.ExecutionResult{}, nil, fmt.Errorf("upsert incident: %w", err)
 	}
 	return axidomain.ExecutionResult{
-			Data:    in.Incident.ID,
-			Summary: fmt.Sprintf("upserted incident %s", in.Incident.ID),
-		}, ev("mnemos.write.incident", map[string]any{
-			"incident_id": in.Incident.ID, "severity": string(in.Incident.Severity),
-			"status": string(in.Incident.Status),
-		}), nil
+		Data:    in.Incident.ID,
+		Summary: fmt.Sprintf("upserted incident %s", in.Incident.ID),
+	}, ev("mnemos.write.incident", map[string]any{
+		"incident_id": in.Incident.ID, "severity": string(in.Incident.Severity),
+		"status": string(in.Incident.Status),
+	}), nil
 }
 
 // Incident upserts an incident record. Returns the incident id.
@@ -445,11 +445,11 @@ func (e feedbackExecutor) Execute(ctx context.Context, input any, _ axidomain.Ca
 		return axidomain.ExecutionResult{}, nil, fmt.Errorf("upsert feedback: %w", err)
 	}
 	return axidomain.ExecutionResult{
-			Data:    in.State.ClaimID,
-			Summary: fmt.Sprintf("upserted feedback for claim %s", in.State.ClaimID),
-		}, ev("mnemos.write.feedback", map[string]any{
-			"claim_id": in.State.ClaimID,
-		}), nil
+		Data:    in.State.ClaimID,
+		Summary: fmt.Sprintf("upserted feedback for claim %s", in.State.ClaimID),
+	}, ev("mnemos.write.feedback", map[string]any{
+		"claim_id": in.State.ClaimID,
+	}), nil
 }
 
 // Feedback upserts per-claim feedback state. Returns the claim id.
@@ -478,13 +478,13 @@ func (e artifactsExecutor) Execute(ctx context.Context, input any, _ axidomain.C
 		return axidomain.ExecutionResult{}, nil, fmt.Errorf("persist artifacts: %w", err)
 	}
 	return axidomain.ExecutionResult{
-			Data: writeCount{Accepted: len(in.Events)},
-			Summary: fmt.Sprintf("persisted events=%d claims=%d links=%d rels=%d",
-				len(in.Events), len(in.Claims), len(in.Links), len(in.Relationships)),
-		}, ev("mnemos.write.artifacts", map[string]any{
-			"events": len(in.Events), "claims": len(in.Claims),
-			"links": len(in.Links), "relationships": len(in.Relationships),
-		}), nil
+		Data: writeCount{Accepted: len(in.Events)},
+		Summary: fmt.Sprintf("persisted events=%d claims=%d links=%d rels=%d",
+			len(in.Events), len(in.Claims), len(in.Links), len(in.Relationships)),
+	}, ev("mnemos.write.artifacts", map[string]any{
+		"events": len(in.Events), "claims": len(in.Claims),
+		"links": len(in.Links), "relationships": len(in.Relationships),
+	}), nil
 }
 
 // Artifacts persists a full ingest batch (events, claims, evidence
@@ -521,11 +521,11 @@ func (e attachOutcomeExecutor) Execute(ctx context.Context, input any, _ axidoma
 		return axidomain.ExecutionResult{}, nil, fmt.Errorf("auto-link validates/refutes edges: %w", err)
 	}
 	return axidomain.ExecutionResult{
-			Data:    in.DecisionID,
-			Summary: fmt.Sprintf("attached outcome %s to decision %s", in.OutcomeID, in.DecisionID),
-		}, ev("mnemos.write.attach_outcome", map[string]any{
-			"decision_id": in.DecisionID, "outcome_id": in.OutcomeID,
-		}), nil
+		Data:    in.DecisionID,
+		Summary: fmt.Sprintf("attached outcome %s to decision %s", in.OutcomeID, in.DecisionID),
+	}, ev("mnemos.write.attach_outcome", map[string]any{
+		"decision_id": in.DecisionID, "outcome_id": in.OutcomeID,
+	}), nil
 }
 
 // AttachOutcome attaches an outcome to a decision and fires the
@@ -602,11 +602,11 @@ func (e pruneRelationshipsExecutor) Execute(ctx context.Context, input any, _ ax
 		}
 	}
 	return axidomain.ExecutionResult{
-			Data:    writeCount{Accepted: len(in.Keep)},
-			Summary: fmt.Sprintf("pruned %d relationship(s), retained %d", in.Dropped, len(in.Keep)),
-		}, ev("mnemos.write.relationships.prune", map[string]any{
-			"dropped": in.Dropped, "retained": len(in.Keep),
-		}), nil
+		Data:    writeCount{Accepted: len(in.Keep)},
+		Summary: fmt.Sprintf("pruned %d relationship(s), retained %d", in.Dropped, len(in.Keep)),
+	}, ev("mnemos.write.relationships.prune", map[string]any{
+		"dropped": in.Dropped, "retained": len(in.Keep),
+	}), nil
 }
 
 // PruneRelationships replaces the stored relationship set with keep, dropping
@@ -730,11 +730,11 @@ func (e dropRelationshipsExecutor) Execute(ctx context.Context, input any, _ axi
 	retained := len(retainedEdges)
 
 	return axidomain.ExecutionResult{
-			Data:    writeCount{Accepted: retained},
-			Summary: fmt.Sprintf("dropped %d relationship(s) across %d claim(s), retained %d", dropped, len(affected), retained),
-		}, ev("mnemos.write.relationships.drop", map[string]any{
-			"dropped": dropped, "retained": retained, "claims_touched": len(affected),
-		}), nil
+		Data:    writeCount{Accepted: retained},
+		Summary: fmt.Sprintf("dropped %d relationship(s) across %d claim(s), retained %d", dropped, len(affected), retained),
+	}, ev("mnemos.write.relationships.drop", map[string]any{
+		"dropped": dropped, "retained": retained, "claims_touched": len(affected),
+	}), nil
 }
 
 // DropRelationships removes exactly the enumerated edges, matched on content
