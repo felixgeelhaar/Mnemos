@@ -1,7 +1,14 @@
-# Actions cannot run here while the spending limit holds: every job reports
-# failure with zero steps executed, so a required check that depends on them
-# is permanently red. The gate below still runs; this publishes its verdict
-# as the warden/gate commit status, which branch protection requires instead.
+# Publish the gate's verdict as the warden/gate commit status, so a push
+# carries evidence that the checks ran on the machine that made it.
+#
+# This block used to say Actions cannot run here while the spending limit
+# holds, and that branch protection therefore requires warden/gate INSTEAD
+# of the CI checks. That is true of the org's private repos; mnemos is
+# public, so its Actions have always run. Carried over unedited, the
+# comment justified protection that required warden/gate and nothing else
+# — which is how main stayed red for three days in August 2026 with
+# nothing blocking a merge. Protection now requires the ci/* checks too,
+# and warden/gate alongside them rather than in their place.
 status:
   enabled: true
 
