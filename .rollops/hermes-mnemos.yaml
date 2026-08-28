@@ -85,8 +85,12 @@ spec:
                 - mountPath: /data
                   name: data
               dnsPolicy: ClusterFirst
-              nodeSelector:
-                kubernetes.io/hostname: edge-1
+              # No nodeSelector. This used to pin to edge-1 because mnemos-data was
+              # a local-path volume — a directory that existed only on that node —
+              # and edge-1 is also the only control-plane node, so the brain and
+              # the cluster shared a single point of failure. The volume is
+              # Longhorn now, with a replica on each node, so the pod is free to
+              # move and the scheduler can balance it.
               restartPolicy: Always
               schedulerName: default-scheduler
               securityContext: {}
