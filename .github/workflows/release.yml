@@ -61,7 +61,7 @@ jobs:
       # the GitHub release alongside the archives.
       - name: Install nox
         env:
-          NOX_VERSION: 1.7.0
+          NOX_VERSION: 1.30.1
         run: |
           set -euo pipefail
           if command -v nox >/dev/null 2>&1; then
@@ -86,7 +86,8 @@ jobs:
       - name: Generate SBOM (nox)
         # The scan also reports findings; SBOM generation is the purpose
         # here. Gating happens in the security workflow with the full
-        # baseline (which is gitignored and machine-local). Soft-fail so
+        # baseline committed at .nox/baseline.json (this comment previously
+        # called it gitignored and machine-local; it is neither). Soft-fail so
         # a non-zero finding count doesn't gate the release — sbom.cdx /
         # sbom.spdx still land in sbom-out/ either way.
         run: |
