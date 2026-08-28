@@ -39,8 +39,19 @@ jobs:
       # The org-pinned golangci-lint v2.7.2 release binary is built with
       # go1.25 and refuses to lint a go1.26.2 module ("build Go version is
       # lower than the targeted Go version"). v2.12.2 is built with go1.26.2.
+      #
+      # Raised again to v2.13.1 (built with go1.27.0): the gofmt linter uses
+      # whichever gofmt golangci-lint was BUILT with, not the go-version
+      # above, and go1.27's gofmt aligns struct literals differently. Source
+      # formatted by anyone on go1.27 therefore failed under v2.12.2 —
+      # internal/govwrite/executors.go:108 and lifecycle.go:45 — while being
+      # correct. main was red on that alone from 2026-08-25. v2.13.1 reports
+      # 0 issues on the same tree.
+      #
+      # So this pin tracks the newest Go anyone formats with, not the
+      # module's own go directive.
       # TODO(org): bump the shared go-ci.yml golangci default for go1.26 repos.
-      golangci-version: "v2.12.2"
+      golangci-version: "v2.13.1"
       # mnemos enforces coverctl check already; pure-Go core runs fine on ubuntu.
       coverage: true
       cross-platform: false
